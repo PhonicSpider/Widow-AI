@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Recluse</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Rajdhani:wght@300;400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/main.css" />
+</head>
+<body>
+
+  <!-- Ambient background layers -->
+  <div id="bg-layer"></div>
+  <div id="ember-particles"></div>
+
+  <!-- Main Recluse interface -->
+  <div id="recluse-core">
+
+    <!-- The orb -->
+    <div id="orb-container">
+      <canvas id="waveform-canvas"></canvas>
+      <div id="orb-glow"></div>
+      <div id="orb-ring"></div>
+    </div>
+
+    <!-- Status & transcript -->
+    <div id="status-bar">
+      <span id="status-text">DORMANT</span>
+    </div>
+
+    <div id="transcript">
+      <div id="transcript-inner"></div>
+    </div>
+
+  </div>
+
+  <!-- Side panel — appears when Recluse opens a tool/app -->
+  <div id="side-panel" class="hidden">
+    <div id="panel-header">
+      <span id="panel-title">—</span>
+      <div id="panel-controls">
+        <span class="panel-dot"></span>
+        <span class="panel-dot"></span>
+        <span class="panel-dot"></span>
+      </div>
+    </div>
+    <div id="panel-content"></div>
+  </div>
+
+  <script src="js/main.js"></script>
+</body>
+</html>

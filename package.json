@@ -1,0 +1,18 @@
+{
+  "name": "recluse",
+  "version": "0.1.0",
+  "description": "Recluse — Personal AI assistant and system orchestrator",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.20.0"
+  },
+  "devDependencies": {
+    "electron": "^29.0.0"
+  },
+  "author": "Phonic",
+  "license": "MIT"
+}
