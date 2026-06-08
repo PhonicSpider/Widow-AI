@@ -12,24 +12,24 @@ const State = {
 };
 
 let currentState = State.DORMANT;
+let inSession    = false;
 
 // ============================================================
 // ELEMENTS
 // ============================================================
 
-const orbGlow       = document.getElementById('orb-glow');
-const statusText    = document.getElementById('status-text');
-const transcriptEl  = document.getElementById('transcript-inner');
+const statusText          = document.getElementById('status-text');
+const transcriptEl        = document.getElementById('transcript-inner');
 const transcriptContainer = document.getElementById('transcript');
-const recluseCore   = document.getElementById('recluse-core');
-const sidePanel     = document.getElementById('side-panel');
-const panelTitle    = document.getElementById('panel-title');
-const panelContent  = document.getElementById('panel-content');
-const canvas        = document.getElementById('waveform-canvas');
-const ctx           = canvas.getContext('2d');
-const chatBar       = document.getElementById('chat-bar');
-const chatInput     = document.getElementById('chat-input');
-const chatSend      = document.getElementById('chat-send');
+const recluseCore         = document.getElementById('recluse-core');
+const sidePanel           = document.getElementById('side-panel');
+const panelTitle          = document.getElementById('panel-title');
+const panelContent        = document.getElementById('panel-content');
+const panelWebview        = document.getElementById('panel-webview');
+const chatBar             = document.getElementById('chat-bar');
+const chatInput           = document.getElementById('chat-input');
+const chatSend            = document.getElementById('chat-send');
+const consoleToggle       = document.getElementById('console-toggle');
 
 // ============================================================
 // STATE MANAGEMENT
@@ -37,25 +37,29 @@ const chatSend      = document.getElementById('chat-send');
 
 function setState(state) {
   currentState = state;
-  statusText.textContent = state;
 
-  orbGlow.classList.remove('listening', 'speaking', 'thinking');
+  // Session-dormant: recluse is awake but quiet — show "READY" instead of "DORMANT"
+  const displayState = (state === State.DORMANT && inSession) ? 'READY' : state;
+  statusText.textContent = displayState;
   statusText.classList.remove('active');
 
   if (state === State.LISTENING) {
-    orbGlow.classList.add('listening');
     statusText.classList.add('active');
     chatInput.focus();
   } else if (state === State.SPEAKING) {
-    orbGlow.classList.add('speaking');
     statusText.classList.add('active');
   } else if (state === State.THINKING) {
-    orbGlow.classList.add('thinking');
     statusText.classList.add('active');
   }
 
-  // Disable input while thinking
-  const busy = state === State.THINKING;
+  // Body class lets CSS subtly distinguish session-dormant from true dormant
+  document.body.classList.toggle('in-session', inSession);
+
+  // Sync 3D orb
+  if (window.Orb3D) Orb3D.setState(state);
+
+  // Disable input while thinking or speaking
+  const busy = state === State.THINKING || state === State.SPEAKING;
   chatInput.disabled = busy;
   chatSend.disabled = busy;
 }
@@ -73,9 +77,9 @@ function addTranscriptLine(text, role = 'recluse') {
   const lines = transcriptEl.querySelectorAll('.transcript-line');
   if (lines.length > 8) lines[0].remove();
 
-  // Scroll inner container to bottom
   transcriptEl.scrollTop = transcriptEl.scrollHeight;
 }
+
 // ============================================================
 // CHAT — send message to harness
 // ============================================================
@@ -104,9 +108,19 @@ chatInput.addEventListener('keydown', (e) => {
 // SIDE PANEL
 // ============================================================
 
-function openPanel(title, content) {
+function openPanel(title, content, url) {
   panelTitle.textContent = title;
-  panelContent.innerHTML = content;
+
+  if (url) {
+    panelWebview.src = url;
+    panelWebview.classList.remove('hidden');
+    panelContent.classList.add('hidden');
+  } else {
+    panelContent.innerHTML = content || '';
+    panelContent.classList.remove('hidden');
+    panelWebview.classList.add('hidden');
+  }
+
   sidePanel.classList.remove('hidden');
   requestAnimationFrame(() => sidePanel.classList.add('visible'));
   recluseCore.classList.add('panel-open');
@@ -119,91 +133,27 @@ function closePanel() {
   recluseCore.classList.remove('panel-open');
   chatBar.classList.remove('panel-open');
   transcriptContainer.classList.remove('panel-open');
-  setTimeout(() => sidePanel.classList.add('hidden'), 800);
+  setTimeout(() => {
+    sidePanel.classList.add('hidden');
+    panelWebview.src = 'about:blank';
+    panelWebview.classList.add('hidden');
+    panelContent.classList.remove('hidden');
+  }, 800);
 }
 
 // ============================================================
-// WAVEFORM CANVAS
+// 3D ORB — init on load
 // ============================================================
 
-canvas.width  = canvas.offsetWidth  || 260;
-canvas.height = canvas.offsetHeight || 260;
+window.addEventListener('load', () => {
+  if (window.Orb3D) Orb3D.init('orb-container');
+});
 
-let wavePhase = 0;
-let waveAmplitude = 6;
-let waveTargetAmplitude = 6;
-
-function drawWaveform() {
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-  const cx = canvas.width  / 2;
-  const cy = canvas.height / 2;
-  const radius = cx * 0.68;
-
-  waveAmplitude += (waveTargetAmplitude - waveAmplitude) * 0.08;
-
-  const points = 200;
-  ctx.beginPath();
-
-  for (let i = 0; i <= points; i++) {
-    const angle = (i / points) * Math.PI * 2;
-    const wave =
-      Math.sin(angle * 5  + wavePhase)        * waveAmplitude +
-      Math.sin(angle * 11 + wavePhase * 1.4)  * (waveAmplitude * 0.35) +
-      Math.sin(angle * 3  - wavePhase * 0.6)  * (waveAmplitude * 0.5);
-    const r = radius + wave;
-    const x = cx + Math.cos(angle) * r;
-    const y = cy + Math.sin(angle) * r;
-    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+window.addEventListener('resize', () => {
+  if (window.Orb3D) {
+    Orb3D.resize('orb-container');
   }
-
-  ctx.closePath();
-
-  // Color shifts per state
-  const strokeColor =
-    currentState === State.SPEAKING  ? '#09e0e0cc' :
-    currentState === State.LISTENING ? '#09e0e0aa' :
-    currentState === State.THINKING  ? '#09e0e077' : '#09e0e055';
-
-  const glowColor = '#09e0e0';
-
-  ctx.strokeStyle = strokeColor;
-  ctx.lineWidth = 1.2;
-  ctx.shadowColor = glowColor;
-  ctx.shadowBlur = 10;
-  ctx.stroke();
-
-  // Inner ring — subtle second wave slightly smaller
-  ctx.beginPath();
-  for (let i = 0; i <= points; i++) {
-    const angle = (i / points) * Math.PI * 2;
-    const wave =
-      Math.sin(angle * 7  - wavePhase * 1.1) * (waveAmplitude * 0.5) +
-      Math.sin(angle * 4  + wavePhase * 0.8) * (waveAmplitude * 0.3);
-    const r = (radius * 0.82) + wave;
-    const x = cx + Math.cos(angle) * r;
-    const y = cy + Math.sin(angle) * r;
-    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
-  }
-  ctx.closePath();
-  ctx.strokeStyle = strokeColor.replace('99', '44').replace('bb', '44').replace('77', '33').replace('66', '33');
-  ctx.lineWidth = 0.8;
-  ctx.shadowBlur = 4;
-  ctx.stroke();
-
-  wavePhase += currentState === State.LISTENING ? 0.055 :
-               currentState === State.SPEAKING  ? 0.07  :
-               currentState === State.THINKING  ? 0.035 : 0.012;
-
-  waveTargetAmplitude =
-    currentState === State.LISTENING ? 18  :
-    currentState === State.SPEAKING  ? 20  :
-    currentState === State.THINKING  ? 11  : 6;
-
-  requestAnimationFrame(drawWaveform);
-}
-
-drawWaveform();
+});
 
 // ============================================================
 // EMBER PARTICLES
@@ -237,7 +187,6 @@ function createEmber() {
 
   particleContainer.appendChild(el);
 
-  // Recycle
   setTimeout(() => {
     el.remove();
     createEmber();
@@ -246,26 +195,52 @@ function createEmber() {
 
 for (let i = 0; i < EMBER_COUNT; i++) createEmber();
 
+// TTS is handled by the main process via edge-tts (scripts/tts_speak.py).
+// DORMANT state is set by main.js after audio finishes — nothing to do here.
+
+// ============================================================
+// CONSOLE TOGGLE
+// ============================================================
+
+consoleToggle.addEventListener('click', () => {
+  const hidden = transcriptContainer.classList.toggle('console-hidden');
+  chatBar.classList.toggle('console-hidden', hidden);
+  consoleToggle.classList.toggle('active', !hidden);
+  document.body.classList.toggle('console-hidden', hidden);
+});
+
 // ============================================================
 // IPC — Wire up to main process
 // ============================================================
 
 if (window.recluse) {
-  // State changes from main process
   window.recluse.onStateChange((state) => {
+    // Don't interrupt an active response with a LISTENING state from speech detection
+    if (state === 'LISTENING' && (currentState === State.THINKING || currentState === State.SPEAKING)) return;
     setState(state);
   });
 
-  // Responses from harness
   window.recluse.onResponse((data) => {
     if (data.response) addTranscriptLine(data.response, 'recluse');
-    if (data.panel)    openPanel(data.panel.title, data.panel.content);
-    setState(State.DORMANT);
+    if (data.panel)    openPanel(data.panel.title, data.panel.content, data.panel.url);
   });
 
   window.recluse.onPanelChange((panel) => {
-    if (panel) openPanel(panel.title, panel.content);
+    if (panel) openPanel(panel.title, panel.content, panel.url);
     else closePanel();
+  });
+
+  window.recluse.onVoiceCommand(async (command) => {
+    if (currentState === State.THINKING || currentState === State.SPEAKING) return;
+    addTranscriptLine(command, 'user');
+    setState(State.THINKING);
+    await window.recluse.chat(command);
+  });
+
+  window.recluse.onSessionChange((active) => {
+    inSession = active;
+    // Re-apply setState so the status label and body class update immediately
+    setState(currentState);
   });
 }
 
@@ -274,10 +249,8 @@ if (window.recluse) {
 // ============================================================
 
 document.addEventListener('keydown', (e) => {
-  // Don't fire shortcuts when typing in the input
   if (e.target === chatInput) return;
 
-  // Shortcuts for testing states and UI
   if (e.key === '1') setState(State.DORMANT);
   if (e.key === '2') setState(State.LISTENING);
   if (e.key === '3') setState(State.THINKING);

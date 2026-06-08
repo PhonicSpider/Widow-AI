@@ -8,49 +8,49 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Rajdhani:wght@300;400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="css/main.css" />
+  <!-- Three.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 </head>
-<body>
+<body class="console-hidden">
 
-  <!-- Ambient background layers -->
   <div id="bg-layer"></div>
   <div id="ember-particles"></div>
 
-  <!-- Main Recluse interface -->
+  <button id="console-toggle" title="Toggle console">CONSOLE</button>
+
   <div id="recluse-core">
+    <!-- 3D Orb container -->
+    <div id="orb-container"></div>
 
-    <!-- The orb -->
-    <div id="orb-container">
-      <canvas id="waveform-canvas"></canvas>
-      <div id="orb-glow"></div>
-      <div id="orb-ring"></div>
-    </div>
-
-    <!-- Status -->
     <div id="status-bar">
       <span id="status-text">DORMANT</span>
     </div>
-
   </div>
 
-  <!-- Transcript -->
-  <div id="transcript">
+  <div id="transcript" class="console-hidden">
     <div id="transcript-inner"></div>
   </div>
 
-  <!-- Chat input -->
-  <div id="chat-bar">
-    <input 
-      id="chat-input" 
-      type="text" 
-      placeholder="Talk to Recluse..." 
+  <div id="chat-bar" class="console-hidden">
+    <input
+      id="chat-input"
+      type="text"
+      placeholder="Talk to Recluse..."
       autocomplete="off"
       spellcheck="false"
     />
     <button id="chat-send">SEND</button>
   </div>
 
-  <!-- Side panel — appears when Recluse opens a tool/app -->
   <div id="side-panel" class="hidden">
+    <div class="scanlines"></div>
+    <div class="panel-edge-top"></div>
+    <div class="panel-edge-bottom"></div>
+    <div class="panel-edge-left"></div>
+    <div class="panel-edge-right"></div>
+    <div class="panel-corner-bl"></div>
+    <div class="panel-corner-br"></div>
+
     <div id="panel-header">
       <span id="panel-title">—</span>
       <div id="panel-controls">
@@ -60,8 +60,10 @@
       </div>
     </div>
     <div id="panel-content"></div>
+    <webview id="panel-webview" class="hidden" src="about:blank" allowpopups partition="persist:panel"></webview>
   </div>
 
+  <script src="js/orb3d.js"></script>
   <script src="js/main.js"></script>
 </body>
 </html>

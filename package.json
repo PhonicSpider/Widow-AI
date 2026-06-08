@@ -8,8 +8,9 @@
     "dev": "electron . --dev"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.20.0",
-    "dotenv": "^17.4.2"
+    "@anthropic-ai/sdk": "^0.102.0",
+    "dotenv": "^17.4.2",
+    "three": "^0.184.0"
   },
   "devDependencies": {
     "electron": "^29.0.0"
