@@ -1,4 +1,4 @@
-const { clipboard, screen } = require('electron');
+const { app, clipboard, screen } = require('electron');
 const { spawn } = require('child_process');
 const path = require('path');
 const os = require('os');
@@ -267,8 +267,25 @@ function moveWindow(hint, targetBounds, topmost = false) {
   });
 }
 
+// Full Electron relaunch — picks up changes to any main-process file.
+// Schedules relaunch then exits after 1.5s so the current response can finish.
+function restartWidow() {
+  setTimeout(() => { app.relaunch(); app.exit(0); }, 1500);
+  return { restarting: true };
+}
+
+// Renderer-only reload — faster, no main-process restart needed.
+// Use for CSS, HTML, or renderer/js changes.
+function reloadRenderer() {
+  const win = state.widowWindow;
+  if (!win) return { error: 'No window' };
+  setTimeout(() => win.webContents.reload(), 800);
+  return { reloading: true };
+}
+
 module.exports = {
   getTime, getClipboard, getSystemInfo, openApp,
   openNativeInPanel, moveWindow, moveWidowToMonitor,
   getPanelBounds, getAllDisplays, getDisplayMap, getDisplayBounds, getSnapBounds,
+  restartWidow, reloadRenderer,
 };

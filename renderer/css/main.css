@@ -712,10 +712,10 @@ body.console-hidden:not(.state-active) #sys-console,
 
 .console-line {
   font-family: 'Courier New', Courier, monospace;
-  font-size: 11px;
+  font-size: 16px;
   line-height: 1.7;
   letter-spacing: 0.04em;
-  color: #b8b8b8;
+  color: #d3d0d0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

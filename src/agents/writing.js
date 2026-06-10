@@ -1,0 +1,117 @@
+require('dotenv').config();
+
+const Anthropic  = require('@anthropic-ai/sdk');
+const { writeFile, readFile } = require('../tools/files');
+
+const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+const CFG = {
+  model:     process.env.WIDOW_MODEL || 'claude-sonnet-4-6',
+  maxTokens: 8096,
+};
+
+const WRITING_TOOLS = [
+  {
+    name: 'read_file',
+    description: 'Read an existing document for context or to continue from where it left off.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Absolute path to the file' },
+      },
+      required: ['path'],
+    },
+  },
+  {
+    name: 'write_file',
+    description: 'Save finished writing to a file.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        path:    { type: 'string', description: 'Absolute path to save to' },
+        content: { type: 'string', description: 'The writing to save' },
+      },
+      required: ['path', 'content'],
+    },
+  },
+];
+
+const SYSTEM_PROMPT = `You are a writing specialist working inside Widow, a personal AI assistant. You were delegated a writing task by Widow's main harness.
+
+You help with all forms of writing:
+- Creative fiction (stories, worldbuilding, characters, dialogue)
+- Descriptions and product copy
+- Documentation and technical writing
+- Branding, taglines, names
+- Game lore and narrative design
+- Social content and posts
+- Letters, scripts, pitches
+
+Principles:
+- Match the tone and voice the user specifies — if they don't, infer from context
+- Write with natural human rhythm: varied sentence length, concrete details, no generic filler
+- Avoid AI-sounding phrases ("Certainly!", "Absolutely!", "Delve into", "In conclusion")
+- Be direct and vivid — cut anything that doesn't earn its place
+- If writing fiction or creative content, lean into specificity over generality
+- If asked for options/variations, give 3 distinctly different takes, not slight rephrases
+
+If you save to a file, confirm the path.
+Return just the writing itself as your response, not a cover explanation, unless asked.`;
+
+async function run(task, context) {
+  const messages = [];
+  let userContent = `Writing task: ${task}`;
+  if (context) userContent += `\n\nContext: ${context}`;
+  messages.push({ role: 'user', content: userContent });
+
+  let finalResponse = '';
+
+  try {
+    while (true) {
+      const response = await client.messages.create({
+        model:      CFG.model,
+        max_tokens: CFG.maxTokens,
+        system:     SYSTEM_PROMPT,
+        tools:      WRITING_TOOLS,
+        messages,
+      });
+
+      if (response.stop_reason === 'tool_use') {
+        messages.push({ role: 'assistant', content: response.content });
+
+        const toolUseBlocks = response.content.filter(b => b.type === 'tool_use');
+        const toolResults   = await Promise.all(
+          toolUseBlocks.map(async (block) => {
+            console.log(`[Writing tool] ${block.name}`);
+            let result;
+            if (block.name === 'read_file')  result = readFile(block.input.path);
+            else if (block.name === 'write_file') result = writeFile(block.input.path, block.input.content);
+            else result = { error: `Unknown tool: ${block.name}` };
+            return {
+              type:        'tool_result',
+              tool_use_id: block.id,
+              content:     JSON.stringify(result),
+            };
+          })
+        );
+
+        messages.push({ role: 'user', content: toolResults });
+        continue;
+      }
+
+      finalResponse = response.content
+        .filter(b => b.type === 'text')
+        .map(b => b.text)
+        .join('');
+      break;
+    }
+
+    return { success: true, result: finalResponse };
+
+  } catch (err) {
+    console.error('[Writing agent] Error:', err);
+    return { success: false, error: err.message };
+  }
+}
+
+module.exports = { run };

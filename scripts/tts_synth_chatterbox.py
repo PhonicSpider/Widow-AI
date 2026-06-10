@@ -2,6 +2,9 @@
 tts_synth_chatterbox.py -- drop-in replacement for tts_synth.py
 Replaces Edge TTS with local Chatterbox via Chatterbox TTS Server.
 
+Uses the richer /tts endpoint (not the OpenAI-compat /v1/audio/speech) so
+voice quality parameters (exaggeration, cfg_weight, temperature) are available.
+
 Protocol (unchanged -- speaker.js expects exactly this):
   stdin:  one sentence per line
   stdout: READY:<filepath>  on success
@@ -18,28 +21,31 @@ import requests
 # ============================================================
 
 CHATTERBOX_URL = os.environ.get('CHATTERBOX_URL', 'http://localhost:8004')
-VOICE_FILE     = os.environ.get('CHATTERBOX_VOICE', 'widow')
-EXAGGERATION   = float(os.environ.get('CHATTERBOX_EXAGGERATION', '0.5'))
-CFG_WEIGHT     = float(os.environ.get('CHATTERBOX_CFG_WEIGHT',   '0.4'))
-TEMPERATURE    = float(os.environ.get('CHATTERBOX_TEMPERATURE',  '0.7'))
+VOICE_FILE     = os.environ.get('CHATTERBOX_VOICE', 'widow.wav')
+EXAGGERATION   = float(os.environ.get('CHATTERBOX_EXAGGERATION', '0.35'))
+CFG_WEIGHT     = float(os.environ.get('CHATTERBOX_CFG_WEIGHT',   '0.6'))
+TEMPERATURE    = float(os.environ.get('CHATTERBOX_TEMPERATURE',  '0.75'))
+SPEED_FACTOR   = float(os.environ.get('CHATTERBOX_SPEED',        '1.0'))
 TEMP_DIR       = tempfile.gettempdir()
 
 
 def synthesise(text: str) -> str:
     payload = {
-        'input':           text,
-        'response_format': 'wav',
-        'exaggeration':    EXAGGERATION,
-        'cfg_weight':      CFG_WEIGHT,
-        'temperature':     TEMPERATURE,
+        'text':                text,
+        'voice_mode':          'predefined',
+        'predefined_voice_id': VOICE_FILE,
+        'output_format':       'wav',
+        'exaggeration':        EXAGGERATION,
+        'cfg_weight':          CFG_WEIGHT,
+        'temperature':         TEMPERATURE,
+        'speed_factor':        SPEED_FACTOR,
+        'split_text':          True,
     }
-    if VOICE_FILE:
-        payload['voice'] = VOICE_FILE
 
     response = requests.post(
-        f'{CHATTERBOX_URL}/v1/audio/speech',
+        f'{CHATTERBOX_URL}/tts',
         json=payload,
-        timeout=30,
+        timeout=60,
     )
     response.raise_for_status()
 

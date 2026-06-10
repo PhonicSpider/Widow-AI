@@ -25,9 +25,11 @@ CHANNELS     = 2        # stereo from Voicemeeter (downmixed to mono before Vosk
 CHUNK_FRAMES = 4800     # frames per read block (100 ms at 48 kHz)
 
 # -- Voice activity detection (VAD) -----------------------------
-ENERGY_THRESHOLD   = 400  # RMS threshold above which a chunk counts as speech (int16 scale)
+ENERGY_THRESHOLD   = 600  # RMS threshold above which a chunk counts as speech (int16 scale)
+                           # raised from 400 to reduce false triggers from background noise
 SPEECH_ON_CHUNKS   = 3    # consecutive loud chunks required to confirm speech onset (300 ms)
-SILENCE_END_CHUNKS = 8    # consecutive quiet chunks required to end an utterance (800 ms)
+SILENCE_END_CHUNKS = 14   # consecutive quiet chunks required to end an utterance (1400 ms)
+                           # raised from 8 to give more patience before cutting off sentences
 PRE_ROLL_CHUNKS    = 5    # chunks prepended before speech onset to avoid clipping (500 ms)
 
 # -- Whisper transcription --------------------------------------

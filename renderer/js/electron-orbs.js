@@ -18,7 +18,7 @@
 
   const CFG = {
     // Orbit geometry
-    orbitRadiusRatio: 0.62,   // fraction of canvas half-size (1.0 = canvas edge)
+    orbitRadiusRatio: 0.45,   // fraction of canvas half-size (1.0 = canvas edge)
                                // 0.62 puts orbs just outside the ~550px orb shell
     orbitYSquish:     0.28,   // vertical squish factor — makes it look like a tilted ring
                                // 0 = flat line, 1 = circle, 0.28 = slight tilt
@@ -31,7 +31,7 @@
     orbCoreColor:     'rgba(180, 248, 255,',  // bright cyan-white core
 
     // Trail (comet tail)
-    trailLength:      28,      // how many historical positions to store per orb
+    trailLength:      45,      // how many historical positions to store per orb
     trailInterval:    1,       // store a position every N frames (1 = every frame)
     trailMaxAlpha:    0.55,    // alpha of the newest trail segment
 

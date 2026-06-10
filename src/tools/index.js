@@ -1,6 +1,8 @@
 const { webSearch } = require('./web');
-const { getTime, getClipboard, getSystemInfo, openApp, openNativeInPanel, moveWindow, moveWidowToMonitor, getPanelBounds, getDisplayMap, getDisplayBounds, getSnapBounds } = require('./system');
+const { getTime, getClipboard, getSystemInfo, openApp, openNativeInPanel, moveWindow, moveWidowToMonitor, getPanelBounds, getDisplayMap, getDisplayBounds, getSnapBounds, restartWidow, reloadRenderer } = require('./system');
 const { readFile, writeFile, listDirectory, moveFile, copyFile, deleteFile } = require('./files');
+const { click, dblClick, rClick, moveMouse, scroll, drag, typeText, keyPress, getCursor, screenshot, findClick } = require('./desktop');
+const { searchGitHub, getGitHubFile, createGitHubIssue, getGitHubIssues, getPRStatus } = require('./github');
 const state = require('../state');
 
 const TOOL_DEFINITIONS = [
@@ -163,16 +165,184 @@ const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: 'restart_widow',
+    description: "Restart Widow's Electron process. Use after editing any main-process file (harness.js, personality.js, tools, main.js, speaker.js) so the new code is loaded. Widow will be back in ~5 seconds.",
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'reload_renderer',
+    description: "Reload Widow's renderer UI without a full restart. Use after editing renderer files only (HTML, CSS, renderer/js/*.js). Faster than a full restart.",
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
     name: 'delegate_to_agent',
-    description: "Delegate a complex task to a specialized sub-agent. Use 'coding' for any programming task: writing scripts, debugging, editing files, explaining code, installing packages, or modifying Widow's own source code. The agent runs its own tool-use loop and returns a plain-text result for you to synthesize into a spoken reply.",
+    description: "Delegate a complex task to a specialized sub-agent. Use 'coding' for programming tasks, 'research' for in-depth multi-source research, 'writing' for creative/long-form writing tasks. The agent runs its own tool loop and returns a plain-text result.",
     input_schema: {
       type: 'object',
       properties: {
-        agent:   { type: 'string', enum: ['coding'], description: "Which agent to delegate to. Currently: 'coding'" },
+        agent:   { type: 'string', enum: ['coding', 'research', 'writing'], description: "Which agent: 'coding' for code/files, 'research' for deep web research, 'writing' for creative writing" },
         task:    { type: 'string', description: 'Full task description — be specific and include all relevant detail' },
-        context: { type: 'string', description: 'Optional: any context the agent should know (e.g. file paths, prior conversation details, constraints)' },
+        context: { type: 'string', description: 'Optional: any context the agent should know' },
       },
       required: ['agent', 'task'],
+    },
+  },
+
+  // ── Desktop automation ──────────────────────────────────────────────────────
+  {
+    name: 'mouse_click',
+    description: "Click the mouse at screen coordinates. Use screenshot first if you are unsure where to click.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        x:      { type: 'integer', description: 'Screen X coordinate' },
+        y:      { type: 'integer', description: 'Screen Y coordinate' },
+        button: { type: 'string', enum: ['left', 'right', 'middle'], description: "Mouse button (default: 'left')" },
+        clicks: { type: 'integer', description: '1 = single click, 2 = double click (default: 1)' },
+      },
+      required: ['x', 'y'],
+    },
+  },
+  {
+    name: 'mouse_scroll',
+    description: "Scroll at a screen position. Positive amount scrolls up, negative scrolls down.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        x:      { type: 'integer', description: 'Screen X coordinate to scroll at' },
+        y:      { type: 'integer', description: 'Screen Y coordinate to scroll at' },
+        amount: { type: 'integer', description: 'Scroll amount: positive = up, negative = down (e.g. -5 to scroll down)' },
+      },
+      required: ['x', 'y', 'amount'],
+    },
+  },
+  {
+    name: 'mouse_drag',
+    description: "Click and drag from one screen position to another.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        x1: { type: 'integer', description: 'Start X' },
+        y1: { type: 'integer', description: 'Start Y' },
+        x2: { type: 'integer', description: 'End X' },
+        y2: { type: 'integer', description: 'End Y' },
+      },
+      required: ['x1', 'y1', 'x2', 'y2'],
+    },
+  },
+  {
+    name: 'type_text',
+    description: "Type text into the currently focused field or application. Focus the target field first with mouse_click if needed.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: 'Text to type' },
+      },
+      required: ['text'],
+    },
+  },
+  {
+    name: 'key_press',
+    description: "Press a key or keyboard shortcut. Use '+' to combine keys (e.g. 'ctrl+c', 'alt+tab', 'enter', 'escape', 'ctrl+shift+t').",
+    input_schema: {
+      type: 'object',
+      properties: {
+        keys: { type: 'string', description: "Key or combo, e.g. 'enter', 'ctrl+c', 'alt+f4', 'ctrl+shift+t'" },
+      },
+      required: ['keys'],
+    },
+  },
+  {
+    name: 'take_screenshot',
+    description: "Take a screenshot of the full screen or a region. Returns the file path. Use before clicking to see current screen state.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        region: {
+          type: 'object',
+          description: 'Optional region to capture',
+          properties: {
+            x:      { type: 'integer' },
+            y:      { type: 'integer' },
+            width:  { type: 'integer' },
+            height: { type: 'integer' },
+          },
+        },
+      },
+    },
+  },
+  {
+    name: 'get_cursor_pos',
+    description: "Get the current mouse cursor position in screen coordinates. Useful for calibrating clicks.",
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'click_ui_control',
+    description: "Click a UI control (button, checkbox, link, etc.) by its visible text label in a window. More reliable than coordinates for native Windows apps. Use when you know the button/control text but not its exact position.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        window: {  type: 'string', description: "Part of the window title to target, e.g. 'Notepad', 'Discord', 'Chrome'" },
+        control: { type: 'string', description: "Visible text of the control to click, e.g. 'OK', 'Send', 'Submit'" },
+      },
+      required: ['window', 'control'],
+    },
+  },
+
+  // ── GitHub ──────────────────────────────────────────────────────────────────
+  {
+    name: 'github_search',
+    description: "Search GitHub for repositories, code, issues, or pull requests.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Search query (GitHub search syntax supported)' },
+        type:  { type: 'string', enum: ['repositories', 'code', 'issues', 'users'], description: "What to search (default: 'repositories')" },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'github_get_file',
+    description: "Read a file from any public (or your own private) GitHub repository.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        owner: { type: 'string', description: 'Repository owner (username or org)' },
+        repo:  { type: 'string', description: 'Repository name' },
+        path:  { type: 'string', description: 'File path within the repo, e.g. README.md or src/index.js' },
+        ref:   { type: 'string', description: 'Branch, tag, or commit SHA (default: default branch)' },
+      },
+      required: ['owner', 'repo', 'path'],
+    },
+  },
+  {
+    name: 'github_create_issue',
+    description: "Create a GitHub issue on a repository you have access to.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        owner:  { type: 'string', description: 'Repository owner' },
+        repo:   { type: 'string', description: 'Repository name' },
+        title:  { type: 'string', description: 'Issue title' },
+        body:   { type: 'string', description: 'Issue body (markdown supported)' },
+        labels: { type: 'array', items: { type: 'string' }, description: 'Optional label names' },
+      },
+      required: ['owner', 'repo', 'title'],
+    },
+  },
+  {
+    name: 'github_list_issues',
+    description: "List open issues or pull requests for a GitHub repository.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        owner: { type: 'string', description: 'Repository owner' },
+        repo:  { type: 'string', description: 'Repository name' },
+        state: { type: 'string', enum: ['open', 'closed', 'all'], description: "Filter by state (default: 'open')" },
+        type:  { type: 'string', enum: ['issues', 'pulls'], description: "List issues or pull requests (default: 'issues')" },
+      },
+      required: ['owner', 'repo'],
     },
   },
 ];
@@ -259,6 +429,9 @@ async function executeTool(name, input, onPanel) {
     case 'move_widow':
       return moveWidowToMonitor(input.monitor);
 
+    case 'restart_widow':  return restartWidow();
+    case 'reload_renderer': return reloadRenderer();
+
     case 'get_time':        return getTime();
     case 'get_clipboard':   return getClipboard();
     case 'get_system_info': return getSystemInfo();
@@ -297,11 +470,43 @@ async function executeTool(name, input, onPanel) {
     }
 
     case 'delegate_to_agent': {
-      const AGENTS = { coding: () => require('../agents/coding') };
+      const AGENTS = {
+        coding:   () => require('../agents/coding'),
+        research: () => require('../agents/research'),
+        writing:  () => require('../agents/writing'),
+      };
       const factory = AGENTS[input.agent];
       if (!factory) return { error: `Unknown agent: ${input.agent}` };
       return factory().run(input.task, input.context);
     }
+
+    // ── Desktop automation ────────────────────────────────────────────────────
+    case 'mouse_click':
+      return click(input.x, input.y, input.button || 'left', input.clicks || 1);
+    case 'mouse_scroll':
+      return scroll(input.x, input.y, input.amount);
+    case 'mouse_drag':
+      return drag(input.x1, input.y1, input.x2, input.y2);
+    case 'type_text':
+      return typeText(input.text);
+    case 'key_press':
+      return keyPress(input.keys);
+    case 'take_screenshot':
+      return screenshot(input.region || null);
+    case 'get_cursor_pos':
+      return getCursor();
+    case 'click_ui_control':
+      return findClick(input.window, input.control);
+
+    // ── GitHub ────────────────────────────────────────────────────────────────
+    case 'github_search':
+      return searchGitHub(input.query, input.type || 'repositories');
+    case 'github_get_file':
+      return getGitHubFile(input.owner, input.repo, input.path, input.ref);
+    case 'github_create_issue':
+      return createGitHubIssue(input.owner, input.repo, input.title, input.body, input.labels);
+    case 'github_list_issues':
+      return getGitHubIssues(input.owner, input.repo, input.state || 'open', input.type || 'issues');
 
     default:
       return { error: `Unknown tool: ${name}` };

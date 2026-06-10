@@ -1,0 +1,50 @@
+WIDOW — Active TODO List
+Last updated: 2026-06-10
+
+[DONE] Add ability to write to this TODO List
+         Widow can read/write this file directly with write_file.
+         Path: D:\Recluse files\Recluse\TODO
+
+[DONE] Adjust Electron orbs to sit just outside the main Widow orbs
+
+[DONE] Adjust speech in Chatterbox to give Widow more natural sounding voice
+         Switched to /tts endpoint (supports exaggeration, cfg_weight, temperature, speed_factor)
+         Tune via CHATTERBOX_EXAGGERATION, CHATTERBOX_CFG_WEIGHT, CHATTERBOX_TEMPERATURE in .env
+
+[IN PROGRESS] Voice recognition sensitivity
+         - Energy threshold raised (400 -> 600) to reduce false noise triggers
+         - Silence end chunks raised (8 -> 14) to give more patience before cutting off sentences
+         - May still need tuning — adjust ENERGY_THRESHOLD in scripts/speech_recognizer.py
+
+[DONE] Add function to navigate windows by clicking, scrolling, etc.
+         Tools: mouse_click, mouse_scroll, mouse_drag, type_text, key_press,
+                take_screenshot, get_cursor_pos, click_ui_control
+         Python: scripts/desktop_control.py (pyautogui + pywinauto)
+
+[DONE] Integrate a GitHub tool
+         Tools: github_search, github_get_file, github_create_issue, github_list_issues
+         Needs GITHUB_TOKEN in .env for private repos and issue creation.
+
+[DONE] Integrate a research tool
+         Delegate to 'research' agent via delegate_to_agent.
+         Does multi-step web searches and returns a synthesized report.
+
+[DONE] Add writing tool for coming up with stories, descriptions, etc.
+         Delegate to 'writing' agent via delegate_to_agent.
+         Handles fiction, copy, descriptions, branding, game lore, etc.
+
+[DONE] Ensure anything Widow writes does not come up as "AI Written" if tested
+         Writing agent has explicit instructions to avoid AI-sounding phrases and
+         write with natural human rhythm, concrete details, varied sentence length.
+
+[PENDING] Add image generation tool
+         Suggested: DALL-E 3 (needs OPENAI_API_KEY) or local Stable Diffusion.
+         Useful for logos, documentation, branding assets.
+
+[PENDING] Add email and Discord integrations
+         Email: Gmail OAuth setup needed.
+         Discord: Bot token + guild ID needed.
+
+[PENDING] Finish tool running detection
+         If a long task is in progress, Widow should note it and add follow-up to this list.
+         Implement: runningTools Set in state.js, check before executing, queue if busy.
