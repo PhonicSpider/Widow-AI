@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Recluse</title>
+  <title>Widow</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Rajdhani:wght@300;400;500&display=swap" rel="stylesheet">
@@ -16,14 +16,21 @@
   <div id="bg-layer"></div>
   <div id="ember-particles"></div>
 
-  <button id="console-toggle" title="Toggle console">CONSOLE</button>
+  <!-- System console overlay — sits above ember particles, behind the orb -->
+  <div id="sys-console">
+    <div id="sys-console-inner"></div>
+  </div>
 
-  <div id="recluse-core">
-    <!-- 3D Orb container -->
+  <button id="console-toggle" title="Toggle console">CONSOLE</button>
+  <button id="dev-toggle" title="Toggle dev keyboard controls">DEV</button>
+
+  <div id="widow-core">
+    <!-- 3D Orb container — electron-orbs canvas is injected here by electron-orbs.js -->
     <div id="orb-container"></div>
 
     <div id="status-bar">
       <span id="status-text">DORMANT</span>
+      <span id="mute-indicator">MIC OFF</span>
     </div>
   </div>
 
@@ -35,7 +42,7 @@
     <input
       id="chat-input"
       type="text"
-      placeholder="Talk to Recluse..."
+      placeholder="Talk to Widow..."
       autocomplete="off"
       spellcheck="false"
     />
@@ -64,6 +71,8 @@
   </div>
 
   <script src="js/orb3d.js"></script>
+  <script src="js/electron-orbs.js"></script>
+  <script src="js/cat-headphones.js"></script>
   <script src="js/main.js"></script>
 </body>
 </html>

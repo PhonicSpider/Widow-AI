@@ -1,8 +1,52 @@
+# Recluse — Implementation Prompt for Claude Code
+# Two features: model-agnostic harness + Chatterbox TTS
+# Hand this entire file to Claude Code in VS Code.
+
+---
+
+## CONTEXT
+
+Recluse is a Jarvis-style personal AI desktop assistant built with Electron and Node.js.
+The AI core is Claude via the Anthropic API. The project lives at github.com/PhonicSpider/Recluse.
+
+Two changes are being made in this session:
+
+1. Make the AI harness model-agnostic (support Anthropic, Gemini, Ollama, DeepSeek)
+2. Replace Edge TTS with local Chatterbox TTS for a natural-sounding voice
+
+Do not change anything not explicitly listed below. Do not refactor unrelated files.
+
+---
+
+## CHANGE 1 — MODEL-AGNOSTIC HARNESS
+
+### File to replace: `src/agents/harness.js`
+
+The current harness is hardcoded to the Anthropic SDK. Replace it with the version below.
+The external behaviour is identical — `chat(userMessage, { onPanel, onSentence })` and
+`clearHistory()` are the only exports and their signatures do not change.
+
+The only internal change is that the Anthropic SDK calls are replaced by a provider
+adapter layer. Each adapter exposes:
+  - `async *stream(messages, system, tools)` — async generator yielding
+      `{ type: 'text', text }` during streaming and
+      `{ type: 'done', message, containsToolUse }` at the end
+  - `formatToolResult(id, content)` — returns a provider-shaped tool result object
+
+Supported providers (set via RECLUSE_PROVIDER env var):
+  - `anthropic` (default) — uses @anthropic-ai/sdk, existing behaviour preserved exactly
+  - `gemini`              — uses @google/generative-ai
+  - `ollama`              — uses Ollama's OpenAI-compatible local endpoint via fetch
+  - `deepseek`            — reuses the Ollama adapter pointed at DeepSeek's endpoint
+
+### Full replacement content for `src/agents/harness.js`:
+
+```javascript
 require('dotenv').config();
 
 const fs   = require('fs');
 const path = require('path');
-const { WIDOW_PERSONALITY } = require('./personality');
+const { RECLUSE_PERSONALITY } = require('./personality');
 const { TOOL_DEFINITIONS, executeTool } = require('../tools');
 
 // ============================================================
@@ -16,7 +60,7 @@ function makeAnthropicAdapter() {
   return {
     async *stream(messages, system, tools) {
       const s = client.messages.stream({
-        model:      process.env.WIDOW_MODEL || 'claude-sonnet-4-6',
+        model:      process.env.RECLUSE_MODEL || 'claude-sonnet-4-6',
         max_tokens: 2048,
         system,
         tools,
@@ -75,7 +119,7 @@ function makeGeminiAdapter() {
   return {
     async *stream(messages, system, tools) {
       const model = genAI.getGenerativeModel({
-        model:             process.env.WIDOW_MODEL || 'gemini-2.5-flash',
+        model:             process.env.RECLUSE_MODEL || 'gemini-2.5-flash',
         systemInstruction: system,
         tools:             convertTools(tools),
       });
@@ -142,7 +186,7 @@ function makeOllamaAdapter() {
   return {
     async *stream(messages, system, tools) {
       const body = {
-        model:    process.env.WIDOW_MODEL || 'llama3.1:70b',
+        model:    process.env.RECLUSE_MODEL || 'llama3.1:70b',
         stream:   true,
         tools:    convertTools(tools),
         messages: [
@@ -154,14 +198,14 @@ function makeOllamaAdapter() {
         ],
       };
 
-      const baseUrl = process.env.WIDOW_PROVIDER === 'deepseek'
+      const baseUrl = process.env.RECLUSE_PROVIDER === 'deepseek'
         ? (process.env.DEEPSEEK_URL || 'https://api.deepseek.com/v1')
         : OLLAMA_URL;
 
       const headers = { 'Content-Type': 'application/json' };
-      if (process.env.WIDOW_PROVIDER === 'deepseek' && process.env.DEEPSEEK_API_KEY) {
+      if (process.env.RECLUSE_PROVIDER === 'deepseek' && process.env.DEEPSEEK_API_KEY) {
         headers['Authorization'] = `Bearer ${process.env.DEEPSEEK_API_KEY}`;
-        body.model = process.env.WIDOW_MODEL || 'deepseek-v4-flash';
+        body.model = process.env.RECLUSE_MODEL || 'deepseek-v4-flash';
       }
 
       const res = await fetch(`${baseUrl}/chat/completions`, {
@@ -223,7 +267,7 @@ function makeOllamaAdapter() {
 }
 
 function getAdapter() {
-  const provider = (process.env.WIDOW_PROVIDER || 'anthropic').toLowerCase();
+  const provider = (process.env.RECLUSE_PROVIDER || 'anthropic').toLowerCase();
   switch (provider) {
     case 'anthropic': return makeAnthropicAdapter();
     case 'gemini':    return makeGeminiAdapter();
@@ -235,7 +279,7 @@ function getAdapter() {
 }
 
 // ============================================================
-// MEMORY
+// MEMORY — unchanged from original
 // ============================================================
 
 const MEMORY_DIR   = path.join(__dirname, '../../memory');
@@ -289,12 +333,12 @@ async function summarizeOldHistory(oldMessages) {
   try {
     const adapter    = getAdapter();
     const transcript = oldMessages
-      .map(m => `${m.role === 'user' ? 'Phonic' : 'Widow'}: ${m.content}`)
+      .map(m => `${m.role === 'user' ? 'Phonic' : 'Recluse'}: ${m.content}`)
       .join('\n');
 
     const summaryMessages = [{
       role:    'user',
-      content: `Summarize this conversation between Phonic and Widow concisely. Focus on: key topics discussed, decisions made, things Widow learned about Phonic, ongoing projects mentioned. Be specific and factual. No preamble.\n\n${transcript}`,
+      content: `Summarize this conversation between Phonic and Recluse concisely. Focus on: key topics discussed, decisions made, things Recluse learned about Phonic, ongoing projects mentioned. Be specific and factual. No preamble.\n\n${transcript}`,
     }];
 
     let summary = '';
@@ -309,11 +353,11 @@ async function summarizeOldHistory(oldMessages) {
 }
 
 // ============================================================
-// SYSTEM PROMPT + SENTENCE EXTRACTION
+// SYSTEM PROMPT + SENTENCE EXTRACTION — unchanged
 // ============================================================
 
 function buildSystemPrompt() {
-  let prompt = WIDOW_PERSONALITY;
+  let prompt = RECLUSE_PERSONALITY;
   if (longTermSummary) {
     prompt += `\n\n---\n\nLONG TERM MEMORY\n\nHere is a summary of your previous conversations with Phonic. Use this to maintain continuity and context:\n\n${longTermSummary}`;
   }
@@ -338,13 +382,9 @@ function extractSentences(buf) {
 
 // ============================================================
 // CHAT
-// onPanel:       fires when a tool opens the side panel
-// onSentence:    fires for each complete sentence during the final response
-// onConsoleLog:  fires before/after each tool with a status line (drives sys-console + electron orbs)
-// onStateChange: fires on WORKING / THINKING transitions (drives UI state)
 // ============================================================
 
-async function chat(userMessage, { onPanel, onSentence, onConsoleLog, onStateChange } = {}) {
+async function chat(userMessage, { onPanel, onSentence } = {}) {
   conversationHistory.push({ role: 'user', content: userMessage });
 
   const messages = conversationHistory.map(m => ({ ...m }));
@@ -367,7 +407,6 @@ async function chat(userMessage, { onPanel, onSentence, onConsoleLog, onStateCha
       if (event.type === 'done') doneEvent = event;
     }
 
-    // Flush any trailing fragment that didn't end with punctuation
     if (!doneEvent?.containsToolUse && sentenceBuffer.trim().length >= 3) {
       onSentence?.(sentenceBuffer.trim());
     }
@@ -377,29 +416,17 @@ async function chat(userMessage, { onPanel, onSentence, onConsoleLog, onStateCha
     if (response.stop_reason === 'tool_use') {
       messages.push({ role: 'assistant', content: response.content });
 
-      // Signal renderer: tools are about to run
-      onStateChange?.('WORKING');
-
       const toolUseBlocks = response.content.filter(b => b.type === 'tool_use');
       const toolResults   = await Promise.all(
         toolUseBlocks.map(async (block) => {
           console.log(`[Tool] ${block.name}`, block.input);
-          onConsoleLog?.(`▸ ${block.name} — ${JSON.stringify(block.input).slice(0, 80)}`);
-
           const result = await executeTool(block.name, block.input, onPanel);
-
           console.log(`[Tool] ${block.name} result:`, result);
-          onConsoleLog?.(`✓ ${block.name} — done`);
-
           return adapter.formatToolResult(block.id, result);
         })
       );
 
       messages.push({ role: 'user', content: toolResults });
-
-      // Signal renderer: back to thinking while the model processes results
-      onStateChange?.('THINKING');
-
       continue;
     }
 
@@ -433,3 +460,172 @@ function clearHistory() {
 }
 
 module.exports = { chat, clearHistory };
+```
+
+---
+
+## CHANGE 2 — CHATTERBOX TTS
+
+### New file: `scripts/tts_synth_chatterbox.py`
+
+Create this file. Do not modify `scripts/tts_synth.py` — leave it as a fallback.
+
+```python
+"""
+tts_synth_chatterbox.py — drop-in replacement for tts_synth.py
+Replaces Edge TTS with local Chatterbox via Chatterbox TTS Server.
+
+Protocol (unchanged — speaker.js expects exactly this):
+  stdin:  one sentence per line
+  stdout: READY:<filepath>  on success
+          ERROR             on failure
+"""
+
+import sys
+import os
+import tempfile
+import requests
+
+CHATTERBOX_URL = os.environ.get('CHATTERBOX_URL', 'http://localhost:8004')
+VOICE_FILE     = os.environ.get('CHATTERBOX_VOICE', 'recluse')
+EXAGGERATION   = float(os.environ.get('CHATTERBOX_EXAGGERATION', '0.5'))
+CFG_WEIGHT     = float(os.environ.get('CHATTERBOX_CFG_WEIGHT',   '0.4'))
+TEMPERATURE    = float(os.environ.get('CHATTERBOX_TEMPERATURE',  '0.7'))
+TEMP_DIR       = tempfile.gettempdir()
+
+
+def synthesise(text: str) -> str:
+    payload = {
+        'input':           text,
+        'response_format': 'wav',
+        'exaggeration':    EXAGGERATION,
+        'cfg_weight':      CFG_WEIGHT,
+        'temperature':     TEMPERATURE,
+    }
+    if VOICE_FILE:
+        payload['voice'] = VOICE_FILE
+
+    response = requests.post(
+        f'{CHATTERBOX_URL}/v1/audio/speech',
+        json=payload,
+        timeout=30,
+    )
+    response.raise_for_status()
+
+    tmp = tempfile.NamedTemporaryFile(suffix='.wav', dir=TEMP_DIR, delete=False)
+    tmp.write(response.content)
+    tmp.close()
+    return tmp.name
+
+
+def main():
+    sys.stdout.reconfigure(line_buffering=True)
+    for line in sys.stdin:
+        text = line.rstrip('\n').strip()
+        if not text:
+            continue
+        try:
+            path = synthesise(text)
+            print(f'READY:{path}', flush=True)
+        except Exception as e:
+            print(f'[tts_synth_chatterbox] ERROR: {e}', file=sys.stderr, flush=True)
+            print('ERROR', flush=True)
+
+
+if __name__ == '__main__':
+    main()
+```
+
+### Edit: `src/tts/speaker.js`
+
+Change the SYNTH_SCRIPT path from `tts_synth.py` to `tts_synth_chatterbox.py`:
+
+```javascript
+// BEFORE
+const SYNTH_SCRIPT = path.join(__dirname, '../../scripts/tts_synth.py');
+
+// AFTER
+const SYNTH_SCRIPT = path.join(__dirname, '../../scripts/tts_synth_chatterbox.py');
+```
+
+No other changes to speaker.js.
+
+---
+
+## CHANGE 3 — ENVIRONMENT VARIABLES
+
+### Edit: `.env` (add these keys — do not remove existing keys)
+
+```
+# ── Provider selection ──────────────────────────────────────
+# anthropic | gemini | ollama | deepseek
+RECLUSE_PROVIDER=anthropic
+
+# Model override — leave blank to use each provider's default
+# Defaults: anthropic=claude-sonnet-4-6, gemini=gemini-2.5-flash,
+#           ollama=llama3.1:70b, deepseek=deepseek-v4-flash
+RECLUSE_MODEL=
+
+# ── Gemini (free tier) ──────────────────────────────────────
+# Get key free at https://aistudio.google.com/app/apikey
+GEMINI_API_KEY=
+
+# ── Ollama (local, no key needed) ───────────────────────────
+OLLAMA_URL=http://localhost:11434/v1
+
+# ── DeepSeek ────────────────────────────────────────────────
+DEEPSEEK_API_KEY=
+DEEPSEEK_URL=https://api.deepseek.com/v1
+
+# ── Chatterbox TTS ──────────────────────────────────────────
+CHATTERBOX_URL=http://localhost:8004
+CHATTERBOX_VOICE=recluse
+CHATTERBOX_EXAGGERATION=0.5
+CHATTERBOX_CFG_WEIGHT=0.4
+CHATTERBOX_TEMPERATURE=0.7
+```
+
+### Edit: `.env.example` — add the same keys (without values) so new users know what to fill in.
+
+---
+
+## CHANGE 4 — DEPENDENCIES
+
+Run the following after making the above changes:
+
+```bash
+# Gemini SDK (only needed if using Gemini provider)
+npm install @google/generative-ai
+
+# Python dependency for Chatterbox synth script
+pip install requests
+```
+
+`@anthropic-ai/sdk` is already installed — no change needed for the default provider.
+
+---
+
+## CHATTERBOX SERVER SETUP (one-time, outside of code)
+
+This is not a code change — document in README.md under a new "Voice Setup" section:
+
+1. Clone Chatterbox TTS Server:
+   `git clone https://github.com/devnen/Chatterbox-TTS-Server`
+2. Run `start.bat` — handles all Python deps automatically
+3. First launch downloads models from HuggingFace (~2GB, one time only)
+4. Server runs on http://localhost:8004
+5. (Optional) Voice cloning: record 10-30 seconds of any voice as a clean WAV,
+   save as `recluse.wav` in the server's `voices/` folder.
+   If no voice file is provided, Chatterbox uses its default voice.
+
+---
+
+## WHAT NOT TO CHANGE
+
+- `scripts/tts_synth.py` — leave as-is, it's the Edge TTS fallback
+- `scripts/tts_play.py` — unchanged
+- `src/tts/speaker.js` — only the one SYNTH_SCRIPT line changes
+- `src/agents/personality.js` — unchanged
+- All other agent files — unchanged
+- Memory file structure — unchanged
+- IPC layer — unchanged

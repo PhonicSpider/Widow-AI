@@ -1,5 +1,5 @@
 /* ============================================================
-   RECLUSE — Main Stylesheet
+   WIDOW — Main Stylesheet
    Palette: Black → Deep Red → Orange → Amber → Yellow → Cyan
    ============================================================ */
 
@@ -78,6 +78,36 @@ html, body {
   box-shadow: 0 0 12px #09e0e033;
 }
 
+#dev-toggle {
+  position: fixed;
+  top: 60px;
+  left: 20px;
+  z-index: 50;
+  background: transparent;
+  border: 1px solid var(--red-core);
+  color: var(--text-dim);
+  font-family: var(--font-display);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.35em;
+  padding: 8px 14px;
+  cursor: pointer;
+  text-transform: uppercase;
+  transition: color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+#dev-toggle:hover {
+  color: var(--amber);
+  border-color: var(--amber);
+  box-shadow: 0 0 10px #f0700033;
+}
+
+#dev-toggle.active {
+  color: var(--gold);
+  border-color: var(--gold);
+  box-shadow: 0 0 12px #f5a00044;
+}
+
 /* ============================================================
    BACKGROUND
    ============================================================ */
@@ -101,7 +131,7 @@ html, body {
    CORE LAYOUT
    ============================================================ */
 
-#recluse-core {
+#widow-core {
   position: fixed;
   left: 50%;
   top: 46%;
@@ -117,12 +147,12 @@ html, body {
 }
 
 /* Orb drifts to true center and expands when console is hidden */
-body.console-hidden #recluse-core {
+body.console-hidden #widow-core {
   top: 50%;
   transform: translate(-50%, -50%) scale(1.45);
 }
 
-#recluse-core.panel-open {
+#widow-core.panel-open {
   left: 20%;
   top: 44%;
   transform: translate(-50%, -50%) scale(0.82);
@@ -153,8 +183,9 @@ body.console-hidden #recluse-core {
 #status-bar {
   margin-top: 16px;
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 #status-text {
@@ -172,7 +203,32 @@ body.console-hidden #recluse-core {
   text-shadow: 0 0 16px var(--cyan), 0 0 32px var(--cyan)44;
 }
 
-/* Session-dormant: Recluse is awake but quiet — faint amber pulse on the status label */
+/* ── Mute indicator ── */
+#mute-indicator {
+  font-family: var(--font-display);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.4em;
+  color: var(--cyan);
+  text-shadow: 0 0 10px var(--cyan), 0 0 22px var(--cyan)66;
+  text-transform: uppercase;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.4s ease;
+  animation: none;
+}
+
+body.muted #mute-indicator {
+  opacity: 1;
+  animation: mute-pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes mute-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.45; }
+}
+
+/* Session-dormant: Widow is awake but quiet — faint amber pulse on the status label */
 body.in-session #status-text:not(.active) {
   color: var(--gold);
   animation: session-idle-pulse 3s ease-in-out infinite;
@@ -256,7 +312,7 @@ body.in-session #status-text:not(.active) {
   padding-right: 8px;
 }
 
-.transcript-line.recluse {
+.transcript-line.widow {
   color: var(--amber);
   text-align: left;
   padding-left: 10px;
@@ -593,4 +649,81 @@ body.in-session #status-text:not(.active) {
   8%   { opacity: 0.8; }
   85%  { opacity: 0.15; }
   100% { transform: translateY(-105vh) translateX(var(--drift)) scale(0.1); opacity: 0; }
+}
+
+/* ============================================================
+   SYS-CONSOLE — scrolling agent activity log
+   Sits above ember particles, behind all foreground UI.
+   Visible only when the console toggle is on.
+   ============================================================ */
+
+#sys-console {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 25vw;
+  right: 25vw;
+  z-index: 3;
+  overflow: hidden;
+  pointer-events: none;
+  transition:
+    left    0.8s cubic-bezier(0.16, 1, 0.3, 1),
+    right   0.8s cubic-bezier(0.16, 1, 0.3, 1),
+    opacity 0.4s ease;
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    black 18%,
+    black 82%,
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    black 18%,
+    black 82%,
+    transparent 100%
+  );
+}
+
+/* Slide console left when panel opens — track the orb's new center at 20% */
+/* panel occupies right 58vw + 1.5vw margin; orb center = 20%; console width = 38vw, center = 2 + 19 = 21vw ~ 20% */
+body.panel-open #sys-console {
+  left: 2vw;
+  right: 62vw;
+}
+
+/* Hidden when console toggle is off, unless Widow is in an active processing state */
+body.console-hidden:not(.state-active) #sys-console,
+#sys-console.sys-console-hidden {
+  opacity: 0;
+}
+
+#sys-console-inner {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 0 0 140px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.console-line {
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 11px;
+  line-height: 1.7;
+  letter-spacing: 0.04em;
+  color: #b8b8b8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0;
+  animation: console-line-in 0.2s ease forwards;
+}
+
+@keyframes console-line-in {
+  from { opacity: 0; transform: translateX(-5px); }
+  to   { opacity: 0.22; transform: translateX(0); }
 }

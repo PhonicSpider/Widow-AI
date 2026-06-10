@@ -4,6 +4,29 @@ const path = require('path');
 const os = require('os');
 const state = require('../state');
 
+// ============================================================
+// CONFIGURATION
+// ============================================================
+
+const CFG = {
+  python:            'D:\\Python\\python.exe',
+  windowPlaceScript: path.join(__dirname, '../../scripts/window_place.py'),
+
+  // Timeouts for Python window-placement calls (ms)
+  openNativeTimeoutMs: 25_000,
+  moveWindowTimeoutMs: 15_000,
+
+  // Must mirror the panel CSS geometry so snap coordinates stay accurate:
+  //   top: 4vh, right: 1.5vw, width: 58vw, height: 92vh
+  panel: {
+    topVh:    0.04,
+    rightVw:  0.015,
+    widthVw:  0.58,
+    heightVh: 0.92,
+    headerH:  44,   // px — #panel-header (padding + font + border)
+  },
+};
+
 function getTime() {
   const now = new Date();
   return {
@@ -48,57 +71,52 @@ function openApp(name) {
 }
 
 // Calculate the panel's actual screen pixel coordinates.
-// Must match the panel CSS: top:4vh, right:1.5vw, width:58vw, height:92vh
+// Values are driven by CFG.panel to stay in sync with the CSS geometry.
 function getPanelBounds() {
   let display;
-  if (state.recluseWindow) {
-    const b = state.recluseWindow.getBounds();
+  if (state.widowWindow) {
+    const b = state.widowWindow.getBounds();
     display  = screen.getDisplayNearestPoint({ x: b.x + Math.round(b.width / 2), y: b.y + Math.round(b.height / 2) });
   } else {
     display = state.currentDisplay || screen.getPrimaryDisplay();
   }
   const { x: dx, y: dy, width: dw, height: dh } = display.bounds;
+  const { topVh, rightVw, widthVw, heightVh } = CFG.panel;
 
-  const panelW = Math.round(dw * 0.58);
-  const panelH = Math.round(dh * 0.92);
-  const panelX = Math.round(dx + dw - dw * 0.015 - panelW);
-  const panelY = Math.round(dy + dh * 0.04);
+  const panelW = Math.round(dw * widthVw);
+  const panelH = Math.round(dh * heightVh);
+  const panelX = Math.round(dx + dw - dw * rightVw - panelW);
+  const panelY = Math.round(dy + dh * topVh);
 
   return { x: panelX, y: panelY, width: panelW, height: panelH };
 }
 
 // Launch a native app and snap its window over the panel.
 // Returns a Promise that resolves once the window is placed (or timeout).
-// Height of #panel-header: padding:14px top+bottom + ~15px font line + 1px border
-const PANEL_HEADER_H = 44;
-
 function openNativeInPanel(appName, hint) {
   const panel  = getPanelBounds();
-  // Place native window in the content area, below the panel header
   const x      = panel.x;
-  const y      = panel.y + PANEL_HEADER_H;
+  const y      = panel.y + CFG.panel.headerH;
   const width  = panel.width;
-  const height = panel.height - PANEL_HEADER_H;
-  const script = path.join(__dirname, '../../scripts/window_place.py');
-  const args   = [script, appName, String(x), String(y), String(width), String(height)];
+  const height = panel.height - CFG.panel.headerH;
+  const args   = [CFG.windowPlaceScript, appName, String(x), String(y), String(width), String(height)];
   if (hint) args.push(hint);
 
   console.log('[NativePanel] bounds:', { x, y, width, height }, 'app:', appName);
 
   return new Promise((resolve) => {
-    const proc = spawn('D:\\Python\\python.exe', ['-u', ...args], {
+    const proc = spawn(CFG.python, ['-u', ...args], {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
     let out = '';
     proc.stdout.on('data', d => { out += d.toString(); });
-    // Pipe Python debug lines straight to our terminal
     proc.stderr.on('data', d => { process.stderr.write(d); });
 
     const timer = setTimeout(() => {
       proc.kill();
       resolve({ success: false, error: 'timeout', app: appName });
-    }, 25000);
+    }, CFG.openNativeTimeoutMs);
 
     proc.on('exit', () => {
       clearTimeout(timer);
@@ -119,7 +137,7 @@ function getAllDisplays() {
 
 // Maps human monitor numbers to displays. Recalculated on every call so
 // runtime display changes (plug/unplug) are always reflected.
-//   1 = rightmost display (highest bounds.x)  — Recluse's home
+//   1 = rightmost display (highest bounds.x)  — Widow's home
 //   2 = Windows primary display
 //   3 = leftmost display (lowest bounds.x, 3rd monitor)
 function getDisplayMap() {
@@ -147,8 +165,8 @@ function getDisplayBounds(monitorNumber) {
   return display.workArea;
 }
 
-// Move Recluse's window to a different monitor and reposition all tracked overlays.
-async function moveRecluseToMonitor(monitorNumber) {
+// Move Widow's window to a different monitor and reposition all tracked overlays.
+async function moveWidowToMonitor(monitorNumber) {
   const map    = getDisplayMap();
   const target = map[monitorNumber];
 
@@ -157,10 +175,10 @@ async function moveRecluseToMonitor(monitorNumber) {
     return { success: false, error: `Monitor ${monitorNumber} not found` };
   }
 
-  const win     = state.recluseWindow;
+  const win     = state.widowWindow;
   const oldDisp = state.currentDisplay;
 
-  if (!win) return { success: false, error: 'Recluse window not initialised' };
+  if (!win) return { success: false, error: 'Widow window not initialised' };
 
   const { bounds: nb } = target;
 
@@ -224,13 +242,12 @@ function getSnapBounds(workArea, position = 'center') {
 // Find an already-open window by title hint and move it — no launch.
 function moveWindow(hint, targetBounds, topmost = false) {
   const { x, y, width, height } = targetBounds;
-  const script = path.join(__dirname, '../../scripts/window_place.py');
-  const args   = [script, '-', String(x), String(y), String(width), String(height), hint, topmost ? '1' : '0'];
+  const args = [CFG.windowPlaceScript, '-', String(x), String(y), String(width), String(height), hint, topmost ? '1' : '0'];
 
   console.log('[MoveWindow] hint:', hint, 'target:', targetBounds, 'topmost:', topmost);
 
   return new Promise((resolve) => {
-    const proc = spawn('D:\\Python\\python.exe', ['-u', ...args], {
+    const proc = spawn(CFG.python, ['-u', ...args], {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
@@ -241,7 +258,7 @@ function moveWindow(hint, targetBounds, topmost = false) {
     const timer = setTimeout(() => {
       proc.kill();
       resolve({ success: false, error: 'timeout' });
-    }, 15000);
+    }, CFG.moveWindowTimeoutMs);
 
     proc.on('exit', () => {
       clearTimeout(timer);
@@ -252,6 +269,6 @@ function moveWindow(hint, targetBounds, topmost = false) {
 
 module.exports = {
   getTime, getClipboard, getSystemInfo, openApp,
-  openNativeInPanel, moveWindow, moveRecluseToMonitor,
+  openNativeInPanel, moveWindow, moveWidowToMonitor,
   getPanelBounds, getAllDisplays, getDisplayMap, getDisplayBounds, getSnapBounds,
 };

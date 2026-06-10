@@ -1,4 +1,4 @@
-// renderer/js/main.js — Recluse UI controller
+// renderer/js/main.js — Widow UI controller
 
 // ============================================================
 // STATE
@@ -9,6 +9,7 @@ const State = {
   LISTENING: 'LISTENING',
   THINKING:  'THINKING',
   SPEAKING:  'SPEAKING',
+  WORKING:   'WORKING',
 };
 
 let currentState = State.DORMANT;
@@ -19,9 +20,10 @@ let inSession    = false;
 // ============================================================
 
 const statusText          = document.getElementById('status-text');
+const muteIndicator       = document.getElementById('mute-indicator');
 const transcriptEl        = document.getElementById('transcript-inner');
 const transcriptContainer = document.getElementById('transcript');
-const recluseCore         = document.getElementById('recluse-core');
+const widowCore         = document.getElementById('widow-core');
 const sidePanel           = document.getElementById('side-panel');
 const panelTitle          = document.getElementById('panel-title');
 const panelContent        = document.getElementById('panel-content');
@@ -30,6 +32,36 @@ const chatBar             = document.getElementById('chat-bar');
 const chatInput           = document.getElementById('chat-input');
 const chatSend            = document.getElementById('chat-send');
 const consoleToggle       = document.getElementById('console-toggle');
+const devToggle           = document.getElementById('dev-toggle');
+const sysConsole          = document.getElementById('sys-console');
+const sysConsoleInner     = document.getElementById('sys-console-inner');
+
+// ============================================================
+// DEV MODE
+// ============================================================
+
+let devMode = false;
+
+devToggle.addEventListener('click', () => {
+  devMode = !devMode;
+  devToggle.classList.toggle('active', devMode);
+});
+
+// ============================================================
+// ELECTRON ORB — active tool tracking
+// ============================================================
+// The harness fires onConsoleLog messages with a '▸' prefix when a tool
+// starts and a '✓' prefix when it finishes. We count these to maintain
+// an activeToolCount and drive the electron orb display.
+
+let activeToolCount = 0;
+
+function setActiveToolCount(n) {
+  activeToolCount = Math.max(0, n);
+  if (window.ElectronOrbs) {
+    ElectronOrbs.setCount(activeToolCount);
+  }
+}
 
 // ============================================================
 // STATE MANAGEMENT
@@ -38,7 +70,7 @@ const consoleToggle       = document.getElementById('console-toggle');
 function setState(state) {
   currentState = state;
 
-  // Session-dormant: recluse is awake but quiet — show "READY" instead of "DORMANT"
+  // Session-dormant: widow is awake but quiet — show "READY" instead of "DORMANT"
   const displayState = (state === State.DORMANT && inSession) ? 'READY' : state;
   statusText.textContent = displayState;
   statusText.classList.remove('active');
@@ -50,16 +82,32 @@ function setState(state) {
     statusText.classList.add('active');
   } else if (state === State.THINKING) {
     statusText.classList.add('active');
+  } else if (state === State.WORKING) {
+    statusText.textContent = 'WORKING...';
+    statusText.classList.add('active');
   }
 
-  // Body class lets CSS subtly distinguish session-dormant from true dormant
+  // Body classes for CSS state hooks
   document.body.classList.toggle('in-session', inSession);
+  const active = state === State.WORKING || state === State.THINKING || state === State.SPEAKING;
+  document.body.classList.toggle('state-active', active);
 
-  // Sync 3D orb
+  // Sync 3D orb — add/remove working class on the orb container
+  const orbContainer = document.getElementById('orb-container');
+  if (orbContainer) {
+    orbContainer.classList.toggle('orb--working', state === State.WORKING);
+  }
   if (window.Orb3D) Orb3D.setState(state);
 
-  // Disable input while thinking or speaking
-  const busy = state === State.THINKING || state === State.SPEAKING;
+  // When fully dormant: reset electron orbs and tool counter so nothing lingers
+  // (guards against any missed ✓ completions or error paths)
+  if (state === State.DORMANT) {
+    activeToolCount = 0;
+    if (window.ElectronOrbs) ElectronOrbs.reset();
+  }
+
+  // Disable input while thinking, working, or speaking
+  const busy = state === State.THINKING || state === State.SPEAKING || state === State.WORKING;
   chatInput.disabled = busy;
   chatSend.disabled = busy;
 }
@@ -68,10 +116,10 @@ function setState(state) {
 // TRANSCRIPT
 // ============================================================
 
-function addTranscriptLine(text, role = 'recluse') {
+function addTranscriptLine(text, role = 'widow') {
   const line = document.createElement('div');
   line.classList.add('transcript-line', role);
-  line.textContent = role === 'recluse' ? `> ${text}` : text;
+  line.textContent = role === 'widow' ? `> ${text}` : text;
   transcriptEl.appendChild(line);
 
   const lines = transcriptEl.querySelectorAll('.transcript-line');
@@ -86,13 +134,13 @@ function addTranscriptLine(text, role = 'recluse') {
 
 async function sendMessage() {
   const message = chatInput.value.trim();
-  if (!message || currentState === State.THINKING) return;
+  if (!message || currentState === State.THINKING || currentState === State.WORKING) return;
 
   chatInput.value = '';
   setState(State.THINKING);
   addTranscriptLine(message, 'user');
 
-  await window.recluse.chat(message);
+  await window.widow.chat(message);
 }
 
 chatSend.addEventListener('click', sendMessage);
@@ -123,16 +171,18 @@ function openPanel(title, content, url) {
 
   sidePanel.classList.remove('hidden');
   requestAnimationFrame(() => sidePanel.classList.add('visible'));
-  recluseCore.classList.add('panel-open');
+  widowCore.classList.add('panel-open');
   chatBar.classList.add('panel-open');
   transcriptContainer.classList.add('panel-open');
+  document.body.classList.add('panel-open');
 }
 
 function closePanel() {
   sidePanel.classList.remove('visible');
-  recluseCore.classList.remove('panel-open');
+  widowCore.classList.remove('panel-open');
   chatBar.classList.remove('panel-open');
   transcriptContainer.classList.remove('panel-open');
+  document.body.classList.remove('panel-open');
   setTimeout(() => {
     sidePanel.classList.add('hidden');
     panelWebview.src = 'about:blank';
@@ -142,11 +192,23 @@ function closePanel() {
 }
 
 // ============================================================
+// MUTE
+// ============================================================
+
+function setMuted(muted) {
+  document.body.classList.toggle('muted', muted);
+  if (window.CatHeadphones) {
+    muted ? CatHeadphones.show() : CatHeadphones.hide();
+  }
+}
+
+// ============================================================
 // 3D ORB — init on load
 // ============================================================
 
 window.addEventListener('load', () => {
   if (window.Orb3D) Orb3D.init('orb-container');
+  if (window.CatHeadphones) CatHeadphones.init('orb-container');
 });
 
 window.addEventListener('resize', () => {
@@ -207,40 +269,89 @@ consoleToggle.addEventListener('click', () => {
   chatBar.classList.toggle('console-hidden', hidden);
   consoleToggle.classList.toggle('active', !hidden);
   document.body.classList.toggle('console-hidden', hidden);
+
+  // Also show/hide the sys-console overlay
+  if (sysConsole) {
+    sysConsole.classList.toggle('sys-console-hidden', hidden);
+  }
 });
+
+// ============================================================
+// SYS-CONSOLE — append log lines from harness tool execution
+// ============================================================
+
+const MAX_CONSOLE_LINES = 200;
+
+function appendConsoleLine(msg) {
+  if (!sysConsoleInner) return;
+
+  const line = document.createElement('div');
+  line.classList.add('console-line');
+  line.textContent = msg;
+  sysConsoleInner.appendChild(line);
+
+  // Cap at MAX_CONSOLE_LINES — remove from top
+  const lines = sysConsoleInner.querySelectorAll('.console-line');
+  if (lines.length > MAX_CONSOLE_LINES) {
+    lines[0].remove();
+  }
+
+  // Auto-scroll to bottom
+  if (sysConsole) {
+    sysConsole.scrollTop = sysConsole.scrollHeight;
+  }
+
+  // ── Electron orb tracking ──
+  // '▸' prefix = tool started  → increment active tool count
+  // '✓' prefix = tool finished → decrement active tool count
+  if (msg.startsWith('▸')) {
+    setActiveToolCount(activeToolCount + 1);
+  } else if (msg.startsWith('✓')) {
+    setActiveToolCount(activeToolCount - 1);
+  }
+}
 
 // ============================================================
 // IPC — Wire up to main process
 // ============================================================
 
-if (window.recluse) {
-  window.recluse.onStateChange((state) => {
+if (window.widow) {
+  window.widow.onStateChange((state) => {
     // Don't interrupt an active response with a LISTENING state from speech detection
     if (state === 'LISTENING' && (currentState === State.THINKING || currentState === State.SPEAKING)) return;
     setState(state);
   });
 
-  window.recluse.onResponse((data) => {
-    if (data.response) addTranscriptLine(data.response, 'recluse');
+  window.widow.onResponse((data) => {
+    if (data.response) addTranscriptLine(data.response, 'widow');
     if (data.panel)    openPanel(data.panel.title, data.panel.content, data.panel.url);
   });
 
-  window.recluse.onPanelChange((panel) => {
+  window.widow.onPanelChange((panel) => {
     if (panel) openPanel(panel.title, panel.content, panel.url);
     else closePanel();
   });
 
-  window.recluse.onVoiceCommand(async (command) => {
-    if (currentState === State.THINKING || currentState === State.SPEAKING) return;
+  window.widow.onVoiceCommand(async (command) => {
+    if (currentState === State.THINKING || currentState === State.SPEAKING || currentState === State.WORKING) return;
     addTranscriptLine(command, 'user');
     setState(State.THINKING);
-    await window.recluse.chat(command);
+    await window.widow.chat(command);
   });
 
-  window.recluse.onSessionChange((active) => {
+  window.widow.onSessionChange((active) => {
     inSession = active;
     // Re-apply setState so the status label and body class update immediately
     setState(currentState);
+  });
+
+  // Harness tool-execution log lines → sys-console overlay + electron orb counter
+  window.widow.onConsoleLog((msg) => {
+    appendConsoleLine(msg);
+  });
+
+  window.widow.onMuteChange((muted) => {
+    setMuted(muted);
   });
 }
 
@@ -250,13 +361,20 @@ if (window.recluse) {
 
 document.addEventListener('keydown', (e) => {
   if (e.target === chatInput) return;
+  if (!devMode) return;
 
   if (e.key === '1') setState(State.DORMANT);
   if (e.key === '2') setState(State.LISTENING);
   if (e.key === '3') setState(State.THINKING);
   if (e.key === '4') setState(State.SPEAKING);
-  if (e.key === '5') addTranscriptLine('Open the RSM project for me.', 'user');
-  if (e.key === '6') addTranscriptLine('Sure. Though I\'d have opened it faster if you\'d asked nicely.', 'recluse');
-  if (e.key === '7') openPanel('WORKSPACE — RSM', '<pre style="color:#f07000;font-size:12px">// ronin-server-manager\n// main.js loaded\n\nReady.</pre>');
-  if (e.key === '8') closePanel();
+  if (e.key === '5') setState(State.WORKING);
+  if (e.key === '6') addTranscriptLine('Open the RSM project for me.', 'user');
+  if (e.key === '7') addTranscriptLine('Sure. Though I\'d have opened it faster if you\'d asked nicely.', 'widow');
+  if (e.key === '8') openPanel('WORKSPACE — RSM', '<pre style="color:#f07000;font-size:12px">// ronin-server-manager\n// main.js loaded\n\nReady.</pre>');
+  if (e.key === '9') closePanel();
+  if (e.key === '0') appendConsoleLine('▸ test_tool — {"path": "/some/file.txt"}');
+
+  if (e.key === '+' || e.key === '=') setActiveToolCount(activeToolCount + 1);
+  if (e.key === '-') setActiveToolCount(Math.max(0, activeToolCount - 1));
+  if (e.key === 'Backspace') setActiveToolCount(0);
 });

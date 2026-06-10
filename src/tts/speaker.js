@@ -4,9 +4,15 @@ const { spawn }      = require('child_process');
 const path           = require('path');
 const EventEmitter   = require('events');
 
-const PYTHON      = 'D:\\Python\\python.exe';
-const SYNTH_SCRIPT = path.join(__dirname, '../../scripts/tts_synth.py');
-const PLAY_SCRIPT  = path.join(__dirname, '../../scripts/tts_play.py');
+// ============================================================
+// CONFIGURATION
+// ============================================================
+
+const CFG = {
+  python:      'D:\\Python\\python.exe',
+  synthScript: path.join(__dirname, '../../scripts/tts_synth_chatterbox.py'),
+  playScript:  path.join(__dirname, '../../scripts/tts_play.py'),
+};
 
 // ── Sentence extraction ────────────────────────────────────────────────────────
 // Called from harness as tokens stream in. Returns complete sentences found in
@@ -69,7 +75,7 @@ class Speaker extends EventEmitter {
   // ── Daemon lifecycle ─────────────────────────────────────────────────────────
 
   _spawnSynth() {
-    const proc = spawn(PYTHON, ['-u', SYNTH_SCRIPT], { stdio: ['pipe', 'pipe', 'pipe'] });
+    const proc = spawn(CFG.python, ['-u', CFG.synthScript], { stdio: ['pipe', 'pipe', 'pipe'] });
     let buf = '';
     proc.stdout.on('data', (d) => {
       buf += d.toString();
@@ -100,7 +106,7 @@ class Speaker extends EventEmitter {
   }
 
   _spawnPlay() {
-    const proc = spawn(PYTHON, ['-u', PLAY_SCRIPT], { stdio: ['pipe', 'pipe', 'pipe'] });
+    const proc = spawn(CFG.python, ['-u', CFG.playScript], { stdio: ['pipe', 'pipe', 'pipe'] });
     let buf = '';
     proc.stdout.on('data', (d) => {
       buf += d.toString();

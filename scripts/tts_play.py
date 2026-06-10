@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-tts_play.py — Playback daemon.
+tts_play.py -- Playback daemon.
 Reads temp file paths from stdin, decodes each MP3 with PyAV,
 plays it via sounddevice, deletes the file, then prints DONE.
 Runs as a persistent process; exits cleanly on EXIT or EOF.
@@ -11,6 +11,14 @@ import io
 import numpy as np
 import sounddevice as sd
 import av
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
+# sounddevice output device index. None = system default.
+# Run `python -c "import sounddevice as sd; print(sd.query_devices())"` to list devices.
+OUTPUT_DEVICE = None
 
 
 def play(path: str) -> None:
@@ -43,7 +51,7 @@ def play(path: str) -> None:
         return
 
     audio = np.concatenate(frames, axis=1).T  # (samples, channels)
-    sd.play(audio, rate)
+    sd.play(audio, rate, device=OUTPUT_DEVICE)
     sd.wait()
 
 

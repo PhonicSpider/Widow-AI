@@ -2,6 +2,15 @@ const path = require('path');
 const { spawn } = require('child_process');
 const EventEmitter = require('events');
 
+// ============================================================
+// CONFIGURATION
+// ============================================================
+
+const CFG = {
+  python: 'D:\\Python\\python.exe',
+  script: path.join(__dirname, '../../scripts/speech_recognizer.py'),
+};
+
 class SpeechListener extends EventEmitter {
   constructor() {
     super();
@@ -9,8 +18,7 @@ class SpeechListener extends EventEmitter {
   }
 
   start() {
-    const script = path.join(__dirname, '../../scripts/speech_recognizer.py');
-    this._proc = spawn('D:\\Python\\python.exe', ['-u', script], {
+    this._proc = spawn(CFG.python, ['-u', CFG.script], {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
@@ -42,7 +50,7 @@ class SpeechListener extends EventEmitter {
     });
 
     this._proc.on('exit', (code, signal) => {
-      console.warn(`[Speech] process exited — code: ${code}, signal: ${signal}`);
+      console.warn(`[Speech] process exited -- code: ${code}, signal: ${signal}`);
       this._proc = null;
     });
 

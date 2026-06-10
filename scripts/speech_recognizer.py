@@ -9,24 +9,38 @@ import sounddevice as sd
 import vosk
 from faster_whisper import WhisperModel
 
-DEVICE_INDEX       = 6        # Voicemeeter Out B1 (sounddevice/MME index)
-CAPTURE_RATE       = 48000    # Voicemeeter native rate
-VOSK_RATE          = 16000    # Vosk expects 16kHz
-CHANNELS           = 2        # stereo from Voicemeeter
-CHUNK_FRAMES       = 4800     # 100ms at 48kHz
+# ============================================================
+# CONFIGURATION
+# ============================================================
 
-ENERGY_THRESHOLD   = 400      # RMS above this = speech (int16 scale)
-SPEECH_ON_CHUNKS   = 3        # consecutive loud chunks to start capture (300ms)
-SILENCE_END_CHUNKS = 15       # consecutive quiet chunks to end utterance (1.5s)
-PRE_ROLL_CHUNKS    = 5        # chunks to prepend before speech start (500ms)
+# -- Audio device -----------------------------------------------
+# sounddevice/MME device index for the capture source.
+# Run: python -c "import sounddevice as sd; print(sd.query_devices())" to list.
+DEVICE_INDEX = 6        # Voicemeeter Out B1
 
-WHISPER_MODEL      = "base.en"   # downloads ~74MB on first run; try "small.en" for more accuracy
+# -- Audio format -----------------------------------------------
+CAPTURE_RATE = 48000    # device native sample rate (Hz)
+VOSK_RATE    = 16000    # Vosk wake-word model expects 16 kHz mono
+CHANNELS     = 2        # stereo from Voicemeeter (downmixed to mono before Vosk/Whisper)
+CHUNK_FRAMES = 4800     # frames per read block (100 ms at 48 kHz)
 
-SCRIPT_DIR  = os.path.dirname(os.path.abspath(__file__))
-MODELS_DIR  = os.path.join(SCRIPT_DIR, '..', 'models')
+# -- Voice activity detection (VAD) -----------------------------
+ENERGY_THRESHOLD   = 400  # RMS threshold above which a chunk counts as speech (int16 scale)
+SPEECH_ON_CHUNKS   = 3    # consecutive loud chunks required to confirm speech onset (300 ms)
+SILENCE_END_CHUNKS = 8    # consecutive quiet chunks required to end an utterance (800 ms)
+PRE_ROLL_CHUNKS    = 5    # chunks prepended before speech onset to avoid clipping (500 ms)
 
-WAKE_GRAMMAR  = '["recluse", "hey recluse", "[unk]"]'
-SLEEP_PHRASES = ['goodnight recluse', 'good night recluse', 'goodbye recluse']
+# -- Whisper transcription --------------------------------------
+# "base.en" (~74 MB, fast), "small.en" (~244 MB, more accurate)
+WHISPER_MODEL = "base.en"
+
+# -- Wake / sleep phrases ---------------------------------------
+WAKE_GRAMMAR  = '["widow", "hey widow", "[unk]"]'
+SLEEP_PHRASES = ['goodnight widow', 'good night widow', 'goodbye widow', 'good bye widow']
+
+# -- Paths ------------------------------------------------------
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+MODELS_DIR = os.path.join(SCRIPT_DIR, '..', 'models')
 
 def downsample(data):
     arr  = np.frombuffer(data, dtype=np.int16).reshape(-1, 2)
@@ -82,10 +96,10 @@ def main():
                 mono16k = downsample(bytes(raw))   # int16 ndarray at 16kHz mono
 
                 if mode == 'passive':
-                    # Grammar-constrained Vosk: lightweight, accurate for "recluse"
+                    # Grammar-constrained Vosk: lightweight, accurate for "widow"
                     if wake_rec.AcceptWaveform(mono16k.tobytes()):
                         result = json.loads(wake_rec.Result())
-                        if 'recluse' in result.get('text', ''):
+                        if 'widow' in result.get('text', ''):
                             print("WAKE:", flush=True)
                             mode = 'session'
                             pre_roll.clear()
@@ -133,7 +147,7 @@ def main():
                                 speech_buf = []
 
                                 segments, _ = whisper.transcribe(
-                                    audio, language="en", beam_size=5, vad_filter=True
+                                    audio, language="en", beam_size=1, vad_filter=True
                                 )
                                 text = ' '.join(s.text for s in segments).strip().lower()
                                 # Strip punctuation for reliable keyword matching
@@ -141,7 +155,7 @@ def main():
 
                                 if text_clean:
                                     is_sleep = (
-                                        'recluse' in text_clean and
+                                        'widow' in text_clean and
                                         any(w in text_clean for w in ['goodnight', 'good night', 'goodbye', 'good bye'])
                                     )
                                     if is_sleep:

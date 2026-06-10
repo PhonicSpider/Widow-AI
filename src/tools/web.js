@@ -2,7 +2,7 @@ const https = require('https');
 
 function get(url) {
   return new Promise((resolve, reject) => {
-    https.get(url, { headers: { 'User-Agent': 'Recluse/1.0' } }, (res) => {
+    https.get(url, { headers: { 'User-Agent': 'Widow/1.0' } }, (res) => {
       let data = '';
       res.on('data', chunk => data += chunk);
       res.on('end', () => resolve(data));

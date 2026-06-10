@@ -1,5 +1,5 @@
 const { webSearch } = require('./web');
-const { getTime, getClipboard, getSystemInfo, openApp, openNativeInPanel, moveWindow, moveRecluseToMonitor, getPanelBounds, getDisplayMap, getDisplayBounds, getSnapBounds } = require('./system');
+const { getTime, getClipboard, getSystemInfo, openApp, openNativeInPanel, moveWindow, moveWidowToMonitor, getPanelBounds, getDisplayMap, getDisplayBounds, getSnapBounds } = require('./system');
 const { readFile, writeFile, listDirectory, moveFile, copyFile, deleteFile } = require('./files');
 const state = require('../state');
 
@@ -113,12 +113,12 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'list_monitors',
-    description: "List all connected monitors. Monitor 1 = rightmost (Recluse's home), Monitor 2 = Windows primary (center), Monitor 3 = leftmost. Use this to confirm layout before moving windows.",
+    description: "List all connected monitors. Monitor 1 = rightmost (Widow's home), Monitor 2 = Windows primary (center), Monitor 3 = leftmost. Use this to confirm layout before moving windows.",
     input_schema: { type: 'object', properties: {} },
   },
   {
     name: 'move_window',
-    description: "Move any open window to a specific monitor and snap zone. Monitor 1 = rightmost (Recluse's display), Monitor 2 = primary/center, Monitor 3 = leftmost. Use list_monitors if unsure.",
+    description: "Move any open window to a specific monitor and snap zone. Monitor 1 = rightmost (Widow's display), Monitor 2 = primary/center, Monitor 3 = leftmost. Use list_monitors if unsure.",
     input_schema: {
       type: 'object',
       properties: {
@@ -127,7 +127,7 @@ const TOOL_DEFINITIONS = [
           description: "Part of the window title to search for, e.g. 'Visual Studio Code', 'Discord', 'Minecraft'",
         },
         monitor: {
-          description: "Which monitor: 1=rightmost, 2=primary/center, 3=leftmost. Or 'panel' to snap into Recluse's side panel.",
+          description: "Which monitor: 1=rightmost, 2=primary/center, 3=leftmost. Or 'panel' to snap into Widow's side panel.",
           oneOf: [{ type: 'integer' }, { type: 'string', enum: ['panel'] }],
         },
         position: {
@@ -141,7 +141,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'open_app',
-    description: "Launch an app and display it inside Recluse's UI panel. Web-capable apps (Spotify, Discord, YouTube, etc.) open as a web view inside the panel. Native apps and games are launched and their window is automatically resized and snapped over the panel so it appears embedded in the UI.",
+    description: "Launch an app and display it inside Widow's UI panel. Web-capable apps (Spotify, Discord, YouTube, etc.) open as a web view inside the panel. Native apps and games are launched and their window is automatically resized and snapped over the panel so it appears embedded in the UI.",
     input_schema: {
       type: 'object',
       properties: {
@@ -152,8 +152,8 @@ const TOOL_DEFINITIONS = [
     },
   },
   {
-    name: 'move_recluse',
-    description: "Move Recluse herself to a different monitor. All active overlay windows follow automatically, preserving their relative positions. Monitor 1 = rightmost (her normal home), Monitor 2 = primary/center, Monitor 3 = leftmost.",
+    name: 'move_widow',
+    description: "Move Widow herself to a different monitor. All active overlay windows follow automatically, preserving their relative positions. Monitor 1 = rightmost (her normal home), Monitor 2 = primary/center, Monitor 3 = leftmost.",
     input_schema: {
       type: 'object',
       properties: {
@@ -164,7 +164,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'delegate_to_agent',
-    description: "Delegate a complex task to a specialized sub-agent. Use 'coding' for any programming task: writing scripts, debugging, editing files, explaining code, installing packages, or modifying Recluse's own source code. The agent runs its own tool-use loop and returns a plain-text result for you to synthesize into a spoken reply.",
+    description: "Delegate a complex task to a specialized sub-agent. Use 'coding' for any programming task: writing scripts, debugging, editing files, explaining code, installing packages, or modifying Widow's own source code. The agent runs its own tool-use loop and returns a plain-text result for you to synthesize into a spoken reply.",
     input_schema: {
       type: 'object',
       properties: {
@@ -215,7 +215,7 @@ async function executeTool(name, input, onPanel) {
 
     case 'list_monitors': {
       const map     = getDisplayMap();
-      const labels  = { 1: 'rightmost (Recluse)', 2: 'primary (center)', 3: 'leftmost' };
+      const labels  = { 1: 'rightmost (Widow)', 2: 'primary (center)', 3: 'leftmost' };
       const primary = require('electron').screen.getPrimaryDisplay();
       return Object.entries(map)
         .filter(([, d]) => d !== null)
@@ -239,7 +239,7 @@ async function executeTool(name, input, onPanel) {
         onPanel?.({ title: hint.toUpperCase(), content: '' });
         const result = await moveWindow(hint, content, true);
         if (result.success) {
-          // Register as a tracked overlay so it follows Recluse on monitor change
+          // Register as a tracked overlay so it follows Widow on monitor change
           const idx = state.overlayWindows.findIndex(o => o.hint === hint);
           if (idx !== -1) state.overlayWindows.splice(idx, 1);
           state.overlayWindows.push({ hint, bounds: content });
@@ -256,8 +256,8 @@ async function executeTool(name, input, onPanel) {
       return moveWindow(hint, target, false);
     }
 
-    case 'move_recluse':
-      return moveRecluseToMonitor(input.monitor);
+    case 'move_widow':
+      return moveWidowToMonitor(input.monitor);
 
     case 'get_time':        return getTime();
     case 'get_clipboard':   return getClipboard();
@@ -286,7 +286,7 @@ async function executeTool(name, input, onPanel) {
       const hint   = input.window_title || input.name;
       const result = await openNativeInPanel(input.name, hint);
       if (result.success) {
-        // Register as a tracked overlay so it follows Recluse on monitor change
+        // Register as a tracked overlay so it follows Widow on monitor change
         const panel   = getPanelBounds();
         const content = { x: panel.x, y: panel.y + 44, width: panel.width, height: panel.height - 44 };
         const idx     = state.overlayWindows.findIndex(o => o.hint === hint);
