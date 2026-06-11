@@ -112,6 +112,13 @@ function createWindow() {
 
   widowWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 
+  // DevTools — Ctrl+Shift+I opens inspector in both dev and packaged builds
+  widowWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.control && input.shift && input.key === 'I') {
+      widowWindow.webContents.toggleDevTools();
+    }
+  });
+
   // Publish window + display into shared state so tools can access them
   state.widowWindow  = widowWindow;
   state.currentDisplay = targetDisplay;

@@ -1,4 +1,4 @@
-const { app, clipboard, screen } = require('electron');
+const { app, clipboard, screen, Notification } = require('electron');
 const { spawn } = require('child_process');
 const path = require('path');
 const os = require('os');
@@ -267,6 +267,169 @@ function moveWindow(hint, targetBounds, topmost = false) {
   });
 }
 
+// ============================================================
+// POWERSHELL HELPER
+// ============================================================
+
+function ps(command, timeoutMs = 10_000) {
+  return new Promise((resolve) => {
+    const proc = spawn('powershell.exe', [
+      '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', command,
+    ], { stdio: ['ignore', 'pipe', 'pipe'] });
+
+    let out = '', err = '';
+    proc.stdout.on('data', d => { out += d.toString(); });
+    proc.stderr.on('data', d => { err += d.toString(); });
+
+    const timer = setTimeout(() => {
+      proc.kill();
+      resolve({ ok: false, error: 'timeout', out: '', err: '' });
+    }, timeoutMs);
+
+    proc.on('close', code => {
+      clearTimeout(timer);
+      resolve({ ok: code === 0, out: out.trim(), err: err.trim() });
+    });
+    proc.on('error', e => {
+      clearTimeout(timer);
+      resolve({ ok: false, error: e.message, out: '', err: '' });
+    });
+  });
+}
+
+// ============================================================
+// CLIPBOARD WRITE
+// ============================================================
+
+function setClipboard(text) {
+  try {
+    clipboard.writeText(text);
+    return { success: true, length: text.length };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+}
+
+// ============================================================
+// NOTIFICATIONS
+// ============================================================
+
+function sendNotification(title, body) {
+  try {
+    if (!Notification.isSupported()) {
+      return { success: false, error: 'Notifications not supported on this system' };
+    }
+    const n = new Notification({ title, body });
+    n.show();
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+}
+
+// ============================================================
+// MEDIA CONTROL
+// ============================================================
+
+const MEDIA_KEY_MAP = {
+  play_pause:   0xB3,
+  stop:         0xB2,
+  next_track:   0xB0,
+  prev_track:   0xB1,
+  mute:         0xAD,
+  volume_up:    0xAF,
+  volume_down:  0xAE,
+};
+
+async function mediaControl(action) {
+  const vk = MEDIA_KEY_MAP[action];
+  if (vk === undefined) {
+    return { error: `Unknown action "${action}". Valid: ${Object.keys(MEDIA_KEY_MAP).join(', ')}` };
+  }
+  const script = `
+$sig = '[DllImport("user32.dll")] public static extern void keybd_event(byte bVk,byte bScan,uint dwFlags,int dwExtraInfo);'
+Add-Type -MemberDefinition $sig -Name KB -Namespace W32 -ErrorAction SilentlyContinue
+[W32.KB]::keybd_event(${vk},0,0,0)
+Start-Sleep -Milliseconds 50
+[W32.KB]::keybd_event(${vk},0,2,0)
+Write-Output 'ok'`;
+  const res = await ps(script);
+  return res.out === 'ok' ? { success: true, action } : { success: false, error: res.err || res.out };
+}
+
+// ============================================================
+// VOLUME — Windows Core Audio API
+// ============================================================
+
+// Shared preamble: loads the COM interface and binds $aev (IAudioEndpointVolume).
+// Appended with get or set logic per call.
+const VOLUME_PREAMBLE = `
+Add-Type -TypeDefinition @"
+using System.Runtime.InteropServices;
+[ComImport,Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
+class MMDeviceEnumerator {}
+[Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"),InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface IMMDeviceEnumerator {
+  int _1();
+  [PreserveSig] int GetDefaultAudioEndpoint(int f,int r,out IMMDevice d);
+}
+[Guid("D666063F-1587-4E43-81F1-B948E807363F"),InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface IMMDevice {
+  [PreserveSig] int Activate(ref System.Guid id,int c,System.IntPtr p,out IAudioEndpointVolume v);
+}
+[Guid("5CDF2C82-841E-4546-9722-0CF74078229A"),InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface IAudioEndpointVolume {
+  int _1();int _2();int _3();int _4();int _5();int _6();
+  [PreserveSig] int SetMasterVolumeLevelScalar(float l,System.Guid g);
+  int _8();
+  [PreserveSig] int GetMasterVolumeLevelScalar(out float l);
+}
+"@ -ErrorAction SilentlyContinue
+$enum = [System.Activator]::CreateInstance([Type]::GetTypeFromCLSID([System.Guid]"BCDE0395-E52F-467C-8E3D-C4579291692E"))
+$dev  = $null; ([IMMDeviceEnumerator]$enum).GetDefaultAudioEndpoint(0,1,[ref]$dev) | Out-Null
+$aev  = $null; $g = [System.Guid]"5CDF2C82-841E-4546-9722-0CF74078229A"
+$dev.Activate([ref]$g,23,[System.IntPtr]::Zero,[ref]$aev) | Out-Null
+$aev  = [IAudioEndpointVolume]$aev`;
+
+async function getVolume() {
+  const script = VOLUME_PREAMBLE + `
+$v = 0.0; $aev.GetMasterVolumeLevelScalar([ref]$v) | Out-Null
+[System.Math]::Round($v * 100)`;
+  const res   = await ps(script, 8_000);
+  const level = parseInt(res.out, 10);
+  if (!isNaN(level)) return { volume: level };
+  return { error: res.err || 'Could not read volume' };
+}
+
+async function setVolume(level) {
+  const clamped = Math.max(0, Math.min(100, Math.round(level)));
+  const scalar  = (clamped / 100).toFixed(4);
+  const script  = VOLUME_PREAMBLE + `
+$aev.SetMasterVolumeLevelScalar(${scalar},[System.Guid]::Empty) | Out-Null
+Write-Output 'ok'`;
+  const res = await ps(script, 8_000);
+  return res.out === 'ok' ? { success: true, volume: clamped } : { error: res.err || 'Could not set volume' };
+}
+
+// ============================================================
+// WINDOW LIST
+// ============================================================
+
+async function getWindowList() {
+  const script = `
+Get-Process | Where-Object { $_.MainWindowTitle -ne '' } |
+  Select-Object Name,Id,@{N='Title';E={$_.MainWindowTitle}} |
+  ConvertTo-Json -Compress`;
+  const res = await ps(script, 8_000);
+  try {
+    const raw     = JSON.parse(res.out);
+    const arr     = Array.isArray(raw) ? raw : [raw];
+    return { windows: arr.map(w => ({ title: w.Title, process: w.Name, pid: w.Id })) };
+  } catch {
+    return { error: 'Could not enumerate windows', raw: res.out };
+  }
+}
+
 // Full Electron relaunch — picks up changes to any main-process file.
 // Schedules relaunch then exits after 1.5s so the current response can finish.
 function restartWidow() {
@@ -284,7 +447,8 @@ function reloadRenderer() {
 }
 
 module.exports = {
-  getTime, getClipboard, getSystemInfo, openApp,
+  getTime, getClipboard, setClipboard, getSystemInfo, openApp,
+  sendNotification, mediaControl, getVolume, setVolume, getWindowList,
   openNativeInPanel, moveWindow, moveWidowToMonitor,
   getPanelBounds, getAllDisplays, getDisplayMap, getDisplayBounds, getSnapBounds,
   restartWidow, reloadRenderer,

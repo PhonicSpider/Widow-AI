@@ -1,5 +1,5 @@
-const { webSearch } = require('./web');
-const { getTime, getClipboard, getSystemInfo, openApp, openNativeInPanel, moveWindow, moveWidowToMonitor, getPanelBounds, getDisplayMap, getDisplayBounds, getSnapBounds, restartWidow, reloadRenderer } = require('./system');
+const { webSearch, httpRequest } = require('./web');
+const { getTime, getClipboard, setClipboard, getSystemInfo, openApp, sendNotification, mediaControl, getVolume, setVolume, getWindowList, openNativeInPanel, moveWindow, moveWidowToMonitor, getPanelBounds, getDisplayMap, getDisplayBounds, getSnapBounds, restartWidow, reloadRenderer } = require('./system');
 const { readFile, writeFile, listDirectory, moveFile, copyFile, deleteFile, readFileRange, strReplace, appendFile } = require('./files');
 const { click, dblClick, rClick, moveMouse, scroll, drag, typeText, keyPress, getCursor, screenshot, findClick } = require('./desktop');
 const { searchGitHub, getGitHubFile, createGitHubIssue, getGitHubIssues, getPRStatus } = require('./github');
@@ -38,6 +38,80 @@ const TOOL_DEFINITIONS = [
     name: 'get_clipboard',
     description: "Read whatever text is currently on Phonic's clipboard.",
     input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'set_clipboard',
+    description: "Write text to Phonic's clipboard so he can paste it anywhere.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: 'Text to put on the clipboard' },
+      },
+      required: ['text'],
+    },
+  },
+  {
+    name: 'send_notification',
+    description: "Send a Windows desktop notification that appears in the system tray. Use to alert Phonic without speaking — handy when he's in a game, on a call, or has his mic muted.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        title:   { type: 'string', description: 'Notification title (short, 1-6 words)' },
+        message: { type: 'string', description: 'Notification body text' },
+      },
+      required: ['title', 'message'],
+    },
+  },
+  {
+    name: 'media_control',
+    description: "Control media playback or system volume via keyboard media keys. Works with Spotify, YouTube, VLC, games — anything that responds to media keys.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['play_pause', 'stop', 'next_track', 'prev_track', 'mute', 'volume_up', 'volume_down'],
+          description: "Action to perform",
+        },
+      },
+      required: ['action'],
+    },
+  },
+  {
+    name: 'get_volume',
+    description: "Get the current system master volume level (0–100).",
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'set_volume',
+    description: "Set the system master volume to a specific level (0–100).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        level: { type: 'integer', minimum: 0, maximum: 100, description: 'Volume level 0–100' },
+      },
+      required: ['level'],
+    },
+  },
+  {
+    name: 'get_window_list',
+    description: "List all open windows on the system with their titles and process names. Use before move_window or click_ui_control to confirm a window is open and find its exact title.",
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'http_request',
+    description: "Make a raw HTTP/HTTPS request to any URL — local APIs, webhooks, home automation, external services. Returns status code, headers, and body (auto-parsed as JSON if possible).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        method:    { type: 'string', enum: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'], description: 'HTTP method' },
+        url:       { type: 'string', description: 'Full URL including protocol, e.g. https://api.example.com/data or http://localhost:8080/status' },
+        headers:   { type: 'object', description: 'Optional request headers as key-value pairs', additionalProperties: { type: 'string' } },
+        body:      { description: 'Optional request body — string or JSON object', oneOf: [{ type: 'string' }, { type: 'object' }] },
+        timeoutMs: { type: 'integer', description: 'Timeout in milliseconds (default: 15000)' },
+      },
+      required: ['method', 'url'],
+    },
   },
   {
     name: 'get_system_info',
@@ -459,9 +533,16 @@ async function executeTool(name, input, onPanel, onConsoleLog) {
     case 'restart_widow':  return restartWidow();
     case 'reload_renderer': return reloadRenderer();
 
-    case 'get_time':        return getTime();
-    case 'get_clipboard':   return getClipboard();
-    case 'get_system_info': return getSystemInfo();
+    case 'get_time':          return getTime();
+    case 'get_clipboard':     return getClipboard();
+    case 'set_clipboard':     return setClipboard(input.text);
+    case 'send_notification': return sendNotification(input.title, input.message);
+    case 'media_control':     return mediaControl(input.action);
+    case 'get_volume':        return getVolume();
+    case 'set_volume':        return setVolume(input.level);
+    case 'get_window_list':   return getWindowList();
+    case 'http_request':      return httpRequest(input.method, input.url, input.headers || {}, input.body || null, input.timeoutMs || 15_000);
+    case 'get_system_info':   return getSystemInfo();
 
     case 'read_file':         return readFile(input.path);
     case 'read_file_range':   return readFileRange(input.path, input.startLine, input.endLine);

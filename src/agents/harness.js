@@ -38,7 +38,7 @@ function makeAnthropicAdapter() {
       yield { type: 'done', message: final, containsToolUse };
     },
 
-    formatToolResult(id, content) {
+    formatToolResult(id, content, _name) {
       return { type: 'tool_result', tool_use_id: id, content: JSON.stringify(content) };
     },
   };
@@ -64,7 +64,7 @@ function makeGeminiAdapter() {
       parts: Array.isArray(m.content)
         ? m.content.map(c => ({
             functionResponse: {
-              name:     c.tool_use_id,
+              name:     c.tool_name || c.tool_use_id,
               response: { result: c.content },
             },
           }))
@@ -119,8 +119,8 @@ function makeGeminiAdapter() {
       };
     },
 
-    formatToolResult(id, content) {
-      return { type: 'tool_result', tool_use_id: id, content: JSON.stringify(content) };
+    formatToolResult(id, content, name) {
+      return { type: 'tool_result', tool_use_id: id, tool_name: name, content: JSON.stringify(content) };
     },
   };
 }
@@ -216,7 +216,7 @@ function makeOllamaAdapter() {
       };
     },
 
-    formatToolResult(id, content) {
+    formatToolResult(id, content, _name) {
       return { type: 'tool_result', tool_use_id: id, content: JSON.stringify(content) };
     },
   };
@@ -440,6 +440,13 @@ function toolNarration(name, input) {
     case 'github_get_file':   return `Reading ${input.owner}/${input.repo}/${input.path}`;
     case 'github_create_issue': return `Creating issue on ${input.owner}/${input.repo}`;
     case 'github_list_issues':  return `Listing issues for ${input.owner}/${input.repo}`;
+    case 'set_clipboard':     return `Writing to clipboard`;
+    case 'send_notification': return `Sending notification — "${input.title}"`;
+    case 'media_control':     return `Media: ${(input.action || '').replace(/_/g, ' ')}`;
+    case 'get_volume':        return `Checking volume`;
+    case 'set_volume':        return `Setting volume to ${input.level}%`;
+    case 'get_window_list':   return `Listing open windows`;
+    case 'http_request':      return `${(input.method || 'GET').toUpperCase()} ${input.url}`;
     case 'delegate_to_agent': return `Calling in the ${input.agent} agent — ${(input.task || '').slice(0, 70)}`;
     case 'restart_widow':     return `Restarting Widow`;
     case 'reload_renderer':   return `Reloading the UI`;
@@ -529,7 +536,7 @@ async function chat(userMessage, { onPanel, onSentence, onConsoleLog, onStateCha
           console.log(`[Tool] ${block.name} result:`, result);
           onConsoleLog?.(`✓ ${block.name} — ${resultPreview(block.name, result)}`);
 
-          return adapter.formatToolResult(block.id, result);
+          return adapter.formatToolResult(block.id, result, block.name);
         })
       );
 

@@ -8,10 +8,13 @@ const EventEmitter   = require('events');
 // CONFIGURATION
 // ============================================================
 
+const CHATTERBOX_DIR = process.env.CHATTERBOX_DIR || 'D:\\Widow files\\Chatterbox-TTS-Server';
+
 const CFG = {
-  python:      'D:\\Python\\python.exe',
-  synthScript: path.join(__dirname, '../../scripts/tts_synth_chatterbox.py'),
-  playScript:  path.join(__dirname, '../../scripts/tts_play.py'),
+  python:       path.join(CHATTERBOX_DIR, 'python_embedded', 'python.exe'),
+  pythonSystem: 'D:\\Python\\python.exe',
+  synthScript:  path.join(__dirname, '../../scripts/tts_synth_chatterbox.py'),
+  playScript:   path.join(__dirname, '../../scripts/tts_play.py'),
 };
 
 // ── Sentence extraction ────────────────────────────────────────────────────────
@@ -175,7 +178,7 @@ class Speaker extends EventEmitter {
   }
 
   _spawnPlay() {
-    const proc = spawn(CFG.python, ['-u', CFG.playScript], { stdio: ['pipe', 'pipe', 'pipe'] });
+    const proc = spawn(CFG.pythonSystem, ['-u', CFG.playScript], { stdio: ['pipe', 'pipe', 'pipe'] });
     let buf = '';
     proc.stdout.on('data', (d) => {
       buf += d.toString();

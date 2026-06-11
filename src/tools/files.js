@@ -49,7 +49,14 @@ function listDirectory(dirPath) {
       })),
     };
   } catch (err) {
-    return { error: err.message, path: dirPath };
+    console.error(`[listDirectory] ${err.code} — ${dirPath}: ${err.message}`);
+    const hint =
+      err.code === 'EACCES'  ? 'Access denied — Widow needs admin rights to read this folder. Try running Widow.exe as Administrator.' :
+      err.code === 'ENOENT'  ? 'Folder not found — double-check the path is correct.' :
+      err.code === 'ENOTDIR' ? 'That path is a file, not a folder.' :
+      err.code === 'EPERM'   ? 'Operation not permitted — this folder is protected by Windows.' :
+      null;
+    return { error: `${err.code}: ${err.message}`, path: dirPath, ...(hint && { hint }) };
   }
 }
 

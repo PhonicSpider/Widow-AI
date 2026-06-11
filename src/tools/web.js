@@ -1,4 +1,6 @@
 const https = require('https');
+const http  = require('http');
+const { URL } = require('url');
 
 function get(url) {
   return new Promise((resolve, reject) => {
@@ -44,4 +46,56 @@ async function webSearch(query) {
   }
 }
 
-module.exports = { webSearch };
+// ============================================================
+// HTTP REQUEST — raw GET/POST/PUT/DELETE to any URL or local API
+// ============================================================
+
+function httpRequest(method, url, headers = {}, body = null, timeoutMs = 15_000) {
+  return new Promise((resolve) => {
+    let parsed;
+    try { parsed = new URL(url); }
+    catch (e) { return resolve({ error: `Invalid URL: ${e.message}` }); }
+
+    const lib     = parsed.protocol === 'https:' ? https : http;
+    const bodyStr = body == null
+      ? null
+      : typeof body === 'string' ? body : JSON.stringify(body);
+
+    const reqHeaders = { 'User-Agent': 'Widow/1.0', ...headers };
+    if (bodyStr && !reqHeaders['Content-Type']) {
+      reqHeaders['Content-Type'] = 'application/json';
+    }
+    if (bodyStr) reqHeaders['Content-Length'] = Buffer.byteLength(bodyStr);
+
+    const options = {
+      hostname: parsed.hostname,
+      port:     parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
+      path:     parsed.pathname + parsed.search,
+      method:   method.toUpperCase(),
+      headers:  reqHeaders,
+    };
+
+    const req = lib.request(options, (res) => {
+      let data = '';
+      res.on('data', chunk => { data += chunk; });
+      res.on('end', () => {
+        let parsedBody;
+        try { parsedBody = JSON.parse(data); } catch { parsedBody = data; }
+        resolve({ status: res.statusCode, headers: res.headers, body: parsedBody });
+      });
+    });
+
+    const timer = setTimeout(() => {
+      req.destroy();
+      resolve({ error: `timeout after ${timeoutMs}ms` });
+    }, timeoutMs);
+
+    req.on('close',  () => clearTimeout(timer));
+    req.on('error',  err => { clearTimeout(timer); resolve({ error: err.message }); });
+
+    if (bodyStr) req.write(bodyStr);
+    req.end();
+  });
+}
+
+module.exports = { webSearch, httpRequest };
