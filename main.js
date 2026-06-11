@@ -40,11 +40,17 @@ async function ensureChatterbox() {
     return;
   }
 
-  const dir = process.env.CHATTERBOX_DIR || 'D:\\Chatterbox-TTS-Server';
+  const dir    = process.env.CHATTERBOX_DIR    || 'D:\\Chatterbox-TTS-Server';
+  const python = process.env.CHATTERBOX_PYTHON || 'D:\\Python\\python.exe';
   console.log(`[Chatterbox] Not running — starting from ${dir}`);
 
-  const proc = spawn('cmd.exe', ['/c', 'start.bat'], {
-    cwd: dir, detached: true, stdio: 'ignore',
+  // Spawn Python directly — bypasses start.bat so no CMD window appears.
+  // windowsHide: true sets CREATE_NO_WINDOW; detached + unref lets it outlive Electron.
+  const proc = spawn(python, ['start.py', '--verbose'], {
+    cwd:         dir,
+    detached:    true,
+    stdio:       'ignore',
+    windowsHide: true,
   });
   proc.unref();
 
