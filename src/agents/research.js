@@ -43,16 +43,18 @@ Output format:
 - End with a one-sentence "confidence note" if sources were thin or conflicting
 - The response is read aloud by Widow, so keep formatting voice-friendly`;
 
-async function run(task, context) {
+async function run(task, context, onProgress) {
   const messages = [];
   let userContent = `Research task: ${task}`;
   if (context) userContent += `\n\nContext: ${context}`;
   messages.push({ role: 'user', content: userContent });
 
   let finalResponse = '';
+  const MAX_ITERATIONS = 20;
+  let iterations = 0;
 
   try {
-    while (true) {
+    while (iterations++ < MAX_ITERATIONS) {
       const response = await client.messages.create({
         model:      CFG.model,
         max_tokens: CFG.maxTokens,
@@ -65,19 +67,23 @@ async function run(task, context) {
         messages.push({ role: 'assistant', content: response.content });
 
         const toolUseBlocks = response.content.filter(b => b.type === 'tool_use');
-        const toolResults   = await Promise.all(
-          toolUseBlocks.map(async (block) => {
-            console.log(`[Research tool] ${block.name}: ${block.input.query}`);
-            const result = block.name === 'web_search'
-              ? await webSearch(block.input.query)
-              : { error: `Unknown tool: ${block.name}` };
-            return {
-              type:        'tool_result',
-              tool_use_id: block.id,
-              content:     JSON.stringify(result),
-            };
-          })
-        );
+        const toolResults   = [];
+
+        for (const block of toolUseBlocks) {
+          console.log(`[Research tool] ${block.name}: ${block.input.query}`);
+          onProgress?.(`▸ research: searching "${block.input.query}"`);
+
+          const result = block.name === 'web_search'
+            ? await webSearch(block.input.query)
+            : { error: `Unknown tool: ${block.name}` };
+
+          onProgress?.(`✓ research: search done`);
+          toolResults.push({
+            type:        'tool_result',
+            tool_use_id: block.id,
+            content:     JSON.stringify(result),
+          });
+        }
 
         messages.push({ role: 'user', content: toolResults });
         continue;
@@ -86,10 +92,19 @@ async function run(task, context) {
       finalResponse = response.content
         .filter(b => b.type === 'text')
         .map(b => b.text)
-        .join('');
+        .join('')
+        .trim();
+
+      if (!finalResponse) {
+        messages.push({ role: 'assistant', content: response.content });
+        messages.push({ role: 'user', content: [{ type: 'text', text: 'Please provide your research summary now.' }] });
+        continue;
+      }
+
       break;
     }
 
+    if (!finalResponse) finalResponse = 'Research completed but no summary was produced.';
     return { success: true, result: finalResponse };
 
   } catch (err) {

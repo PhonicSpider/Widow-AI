@@ -367,7 +367,7 @@ const WEB_APP_MAP = {
   vercel:       'https://vercel.com',
 };
 
-async function executeTool(name, input, onPanel) {
+async function executeTool(name, input, onPanel, onConsoleLog) {
   switch (name) {
 
     case 'web_search': {
@@ -477,7 +477,7 @@ async function executeTool(name, input, onPanel) {
       };
       const factory = AGENTS[input.agent];
       if (!factory) return { error: `Unknown agent: ${input.agent}` };
-      return factory().run(input.task, input.context);
+      return factory().run(input.task, input.context, onConsoleLog);
     }
 
     // ── Desktop automation ────────────────────────────────────────────────────

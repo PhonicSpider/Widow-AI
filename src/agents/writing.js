@@ -58,16 +58,18 @@ Principles:
 If you save to a file, confirm the path.
 Return just the writing itself as your response, not a cover explanation, unless asked.`;
 
-async function run(task, context) {
+async function run(task, context, onProgress) {
   const messages = [];
   let userContent = `Writing task: ${task}`;
   if (context) userContent += `\n\nContext: ${context}`;
   messages.push({ role: 'user', content: userContent });
 
   let finalResponse = '';
+  const MAX_ITERATIONS = 20;
+  let iterations = 0;
 
   try {
-    while (true) {
+    while (iterations++ < MAX_ITERATIONS) {
       const response = await client.messages.create({
         model:      CFG.model,
         max_tokens: CFG.maxTokens,
@@ -80,20 +82,24 @@ async function run(task, context) {
         messages.push({ role: 'assistant', content: response.content });
 
         const toolUseBlocks = response.content.filter(b => b.type === 'tool_use');
-        const toolResults   = await Promise.all(
-          toolUseBlocks.map(async (block) => {
-            console.log(`[Writing tool] ${block.name}`);
-            let result;
-            if (block.name === 'read_file')  result = readFile(block.input.path);
-            else if (block.name === 'write_file') result = writeFile(block.input.path, block.input.content);
-            else result = { error: `Unknown tool: ${block.name}` };
-            return {
-              type:        'tool_result',
-              tool_use_id: block.id,
-              content:     JSON.stringify(result),
-            };
-          })
-        );
+        const toolResults   = [];
+
+        for (const block of toolUseBlocks) {
+          console.log(`[Writing tool] ${block.name}`);
+          onProgress?.(`▸ writing: ${block.name}`);
+
+          let result;
+          if (block.name === 'read_file')       result = readFile(block.input.path);
+          else if (block.name === 'write_file') result = writeFile(block.input.path, block.input.content);
+          else                                  result = { error: `Unknown tool: ${block.name}` };
+
+          onProgress?.(`✓ writing: ${block.name} — done`);
+          toolResults.push({
+            type:        'tool_result',
+            tool_use_id: block.id,
+            content:     JSON.stringify(result),
+          });
+        }
 
         messages.push({ role: 'user', content: toolResults });
         continue;
@@ -102,10 +108,19 @@ async function run(task, context) {
       finalResponse = response.content
         .filter(b => b.type === 'text')
         .map(b => b.text)
-        .join('');
+        .join('')
+        .trim();
+
+      if (!finalResponse) {
+        messages.push({ role: 'assistant', content: response.content });
+        messages.push({ role: 'user', content: [{ type: 'text', text: 'Please provide the finished writing now.' }] });
+        continue;
+      }
+
       break;
     }
 
+    if (!finalResponse) finalResponse = 'Writing task completed but no content was returned.';
     return { success: true, result: finalResponse };
 
   } catch (err) {

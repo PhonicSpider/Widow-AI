@@ -230,7 +230,7 @@ ${JSON.stringify(rootStructure, null, 2)}`;
 // MAIN ENTRY — called by delegate_to_agent in tools/index.js
 // ============================================================
 
-async function run(task, context) {
+async function run(task, context, onProgress) {
   const rootStructure = listDirectory(WIDOW_ROOT);
 
   const messages = [];
@@ -239,9 +239,11 @@ async function run(task, context) {
   messages.push({ role: 'user', content: userContent });
 
   let finalResponse = '';
+  const MAX_ITERATIONS = 30;
+  let iterations = 0;
 
   try {
-    while (true) {
+    while (iterations++ < MAX_ITERATIONS) {
       const response = await client.messages.create({
         model:      CFG.model,
         max_tokens: CFG.maxTokens,
@@ -254,17 +256,22 @@ async function run(task, context) {
         messages.push({ role: 'assistant', content: response.content });
 
         const toolUseBlocks = response.content.filter(b => b.type === 'tool_use');
-        const toolResults   = await Promise.all(
-          toolUseBlocks.map(async (block) => {
-            console.log(`[Coding tool] ${block.name}`, block.input);
-            const result = await executeCodingTool(block.name, block.input);
-            return {
-              type:        'tool_result',
-              tool_use_id: block.id,
-              content:     JSON.stringify(result),
-            };
-          })
-        );
+        const toolResults   = [];
+
+        for (const block of toolUseBlocks) {
+          const preview = JSON.stringify(block.input).slice(0, 80);
+          console.log(`[Coding tool] ${block.name}`, block.input);
+          onProgress?.(`▸ coding: ${block.name} — ${preview}`);
+
+          const result = await executeCodingTool(block.name, block.input);
+
+          onProgress?.(`✓ coding: ${block.name} — done`);
+          toolResults.push({
+            type:        'tool_result',
+            tool_use_id: block.id,
+            content:     JSON.stringify(result),
+          });
+        }
 
         messages.push({ role: 'user', content: toolResults });
         continue;
@@ -273,8 +280,22 @@ async function run(task, context) {
       finalResponse = response.content
         .filter(b => b.type === 'text')
         .map(b => b.text)
-        .join('');
+        .join('')
+        .trim();
+
+      // If the model ended without any summary text, ask it to provide one
+      if (!finalResponse) {
+        console.warn('[Coding agent] Empty final response — requesting summary');
+        messages.push({ role: 'assistant', content: response.content });
+        messages.push({ role: 'user',      content: [{ type: 'text', text: 'Please summarize what you just did in 1-3 sentences.' }] });
+        continue;
+      }
+
       break;
+    }
+
+    if (!finalResponse) {
+      finalResponse = 'Task completed but I could not produce a summary.';
     }
 
     return { success: true, result: finalResponse };

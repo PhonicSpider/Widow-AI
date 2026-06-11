@@ -386,7 +386,7 @@ async function chat(userMessage, { onPanel, onSentence, onConsoleLog, onStateCha
           console.log(`[Tool] ${block.name}`, block.input);
           onConsoleLog?.(`▸ ${block.name} — ${JSON.stringify(block.input).slice(0, 80)}`);
 
-          const result = await executeTool(block.name, block.input, onPanel);
+          const result = await executeTool(block.name, block.input, onPanel, onConsoleLog);
 
           console.log(`[Tool] ${block.name} result:`, result);
           onConsoleLog?.(`✓ ${block.name} — done`);

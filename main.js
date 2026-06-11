@@ -1,12 +1,61 @@
 require('dotenv').config();
 
 const { app, BrowserWindow, ipcMain, screen, session, globalShortcut } = require('electron');
-const path = require('path');
+const path   = require('path');
+const http   = require('http');
+const { spawn } = require('child_process');
 const { chat } = require('./src/agents/harness');
 const speechListener = require('./src/speech/listener');
 const speaker = require('./src/tts/speaker');
 const { getDisplayMap, moveWidowToMonitor } = require('./src/tools/system');
 const state = require('./src/state');
+
+// ============================================================
+// CHATTERBOX AUTO-START
+// ============================================================
+
+function isChatterboxRunning() {
+  const base = process.env.CHATTERBOX_URL || 'http://localhost:8004';
+  return new Promise((resolve) => {
+    const req = http.get(`${base}/api/model-info`, { timeout: 2000 }, (res) => {
+      resolve(res.statusCode < 500);
+    });
+    req.on('error',   () => resolve(false));
+    req.on('timeout', () => { req.destroy(); resolve(false); });
+  });
+}
+
+async function waitForChatterbox(maxMs = 90_000) {
+  const deadline = Date.now() + maxMs;
+  while (Date.now() < deadline) {
+    if (await isChatterboxRunning()) return true;
+    await new Promise(r => setTimeout(r, 2500));
+  }
+  return false;
+}
+
+async function ensureChatterbox() {
+  if (await isChatterboxRunning()) {
+    console.log('[Chatterbox] Already running');
+    return;
+  }
+
+  const dir = process.env.CHATTERBOX_DIR || 'D:\\Chatterbox-TTS-Server';
+  console.log(`[Chatterbox] Not running — starting from ${dir}`);
+
+  const proc = spawn('cmd.exe', ['/c', 'start.bat'], {
+    cwd: dir, detached: true, stdio: 'ignore',
+  });
+  proc.unref();
+
+  console.log('[Chatterbox] Waiting for server to become ready...');
+  const ready = await waitForChatterbox(90_000);
+  if (ready) {
+    console.log('[Chatterbox] Ready');
+  } else {
+    console.warn('[Chatterbox] Did not become ready within 90s — TTS may not work');
+  }
+}
 
 let widowWindow = null;
 let micMuted      = false;
@@ -43,7 +92,9 @@ function createWindow() {
   state.currentDisplay = targetDisplay;
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  await ensureChatterbox();
+
   // Grant microphone access for TTS (renderer side)
   session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
     callback(permission === 'media');
