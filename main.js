@@ -40,17 +40,27 @@ async function ensureChatterbox() {
     return;
   }
 
-  const dir    = process.env.CHATTERBOX_DIR    || 'D:\\Chatterbox-TTS-Server';
-  const python = process.env.CHATTERBOX_PYTHON || 'D:\\Python\\python.exe';
+  const dir    = process.env.CHATTERBOX_DIR || 'D:\\Chatterbox-TTS-Server';
+  // Use the embedded Python that ships with the portable Chatterbox install —
+  // it has all dependencies pre-installed. Spawn server.py directly, bypassing
+  // start.bat entirely so no CMD window appears.
+  const embeddedPython = path.join(dir, 'python_embedded', 'python.exe');
+  const embeddedDir    = path.join(dir, 'python_embedded');
+
   console.log(`[Chatterbox] Not running — starting from ${dir}`);
 
-  // Spawn Python directly — bypasses start.bat so no CMD window appears.
-  // windowsHide: true sets CREATE_NO_WINDOW; detached + unref lets it outlive Electron.
-  const proc = spawn(python, ['start.py', '--verbose'], {
+  // Prepend the embedded Python dir to PATH so native DLLs resolve correctly.
+  const env = {
+    ...process.env,
+    PATH: `${embeddedDir};${path.join(embeddedDir, 'Scripts')};${process.env.PATH || ''}`,
+  };
+
+  const proc = spawn(embeddedPython, ['server.py'], {
     cwd:         dir,
     detached:    true,
     stdio:       'ignore',
     windowsHide: true,
+    env,
   });
   proc.unref();
 
