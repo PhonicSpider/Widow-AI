@@ -1,7 +1,15 @@
-require('dotenv').config();
-
-const { app, BrowserWindow, ipcMain, screen, session, globalShortcut } = require('electron');
+const { app } = require('electron');
 const path   = require('path');
+
+// In packaged builds .env is copied to resources/ via extraResources;
+// in dev it lives in the project root alongside main.js.
+require('dotenv').config({
+  path: app.isPackaged
+    ? path.join(process.resourcesPath, '.env')
+    : path.join(__dirname, '.env'),
+});
+
+const { BrowserWindow, ipcMain, screen, session, globalShortcut } = require('electron');
 const http   = require('http');
 const { spawn } = require('child_process');
 const { chat } = require('./src/agents/harness');
@@ -40,7 +48,7 @@ async function ensureChatterbox() {
     return;
   }
 
-  const dir    = process.env.CHATTERBOX_DIR || 'D:\\Chatterbox-TTS-Server';
+  const dir    = process.env.CHATTERBOX_DIR || 'D:\\Widow files\\Chatterbox-TTS-Server';
   // Use the embedded Python that ships with the portable Chatterbox install —
   // it has all dependencies pre-installed. Spawn server.py directly, bypassing
   // start.bat entirely so no CMD window appears.
