@@ -58,6 +58,23 @@ Principles:
 If you save to a file, confirm the path.
 Return just the writing itself as your response, not a cover explanation, unless asked.`;
 
+async function withRetry(fn, onProgress, maxRetries = 3) {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (err.status === 429 && attempt < maxRetries) {
+        const wait = parseInt(err.headers?.['retry-after'] || '60', 10);
+        console.warn(`[Writing agent] 429 rate limit — waiting ${wait}s (retry ${attempt + 1}/${maxRetries})`);
+        onProgress?.(`⏳ rate limit hit — waiting ${wait}s before retry...`);
+        await new Promise(r => setTimeout(r, wait * 1000));
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
 async function run(task, context, onProgress) {
   const messages = [];
   let userContent = `Writing task: ${task}`;
@@ -70,15 +87,22 @@ async function run(task, context, onProgress) {
 
   try {
     while (iterations++ < MAX_ITERATIONS) {
-      const response = await client.messages.create({
-        model:      CFG.model,
-        max_tokens: CFG.maxTokens,
-        system:     SYSTEM_PROMPT,
-        tools:      WRITING_TOOLS,
-        messages,
-      });
+      const response = await withRetry(
+        () => client.messages.create({
+          model:      CFG.model,
+          max_tokens: CFG.maxTokens,
+          system:     SYSTEM_PROMPT,
+          tools:      WRITING_TOOLS,
+          messages,
+        }),
+        onProgress,
+      );
 
       if (response.stop_reason === 'tool_use') {
+        const narration = response.content
+          .filter(b => b.type === 'text').map(b => b.text).join('').trim();
+        if (narration) onProgress?.(`» ${narration}`);
+
         messages.push({ role: 'assistant', content: response.content });
 
         const toolUseBlocks = response.content.filter(b => b.type === 'tool_use');

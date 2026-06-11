@@ -37,6 +37,11 @@ Last updated: 2026-06-10
          Writing agent has explicit instructions to avoid AI-sounding phrases and
          write with natural human rhythm, concrete details, varied sentence length.
 
+[Pending] Ensure truncating is fixed after adjusting token limit and character limit in Code.js
+
+[Pending] Wire up the architecture for Widow to use the research
+         tools to find best way to fdo task, read tool to read the files and find context, and coding tool to make changes with the context. Best free tools should be used for all
+
 [PENDING] Add image generation tool
          Suggested: DALL-E 3 (needs OPENAI_API_KEY) or local Stable Diffusion.
          Useful for logos, documentation, branding assets.

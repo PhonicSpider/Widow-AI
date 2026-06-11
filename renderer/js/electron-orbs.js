@@ -64,6 +64,10 @@
   // Target count set by setCount()
   let targetCount = 0;
 
+  // Rainbow mode — activated by setMode('rainbow'), cleared by setMode('default')
+  let rainbowMode = false;
+  let globalHue   = 0;   // degrees, advances over time when rainbowMode is on
+
   // ============================================================
   // ORB FACTORY
   // ============================================================
@@ -71,14 +75,16 @@
   function createOrb(phaseOffset) {
     const speed = CFG.baseSpeed + (Math.random() - 0.5) * 2 * CFG.speedJitter;
     return {
-      id:      nextOrbId++,
-      angle:   phaseOffset,          // current angle in radians
-      speed,                          // rad/s — direction fixed (CCW for variety, CW for some)
-      dir:     Math.random() < 0.5 ? 1 : -1, // randomly CW or CCW per orb
-      opacity: 0,                     // 0 = invisible, 1 = full
-      fading:  'in',                  // 'in' | 'out' | 'steady'
-      trail:   [],                    // [{x, y, alpha}] — comet tail positions
-      frameCount: 0,                  // internal frame counter for trail interval
+      id:         nextOrbId++,
+      angle:      phaseOffset,
+      speed,
+      dir:        Math.random() < 0.5 ? 1 : -1,
+      opacity:    0,
+      fading:     'in',
+      trail:      [],
+      frameCount: 0,
+      // Each orb gets a fixed hue offset so orbs in a group spread across the spectrum
+      hueOffset:  (nextOrbId * 137.5) % 360,  // golden-angle spacing = no two look alike
     };
   }
 
@@ -190,6 +196,9 @@
   // ============================================================
 
   function update(dt) {
+    // Advance the global hue when in rainbow mode (~72°/s = full cycle every 5 seconds)
+    if (rainbowMode) globalHue = (globalHue + 72 * dt) % 360;
+
     // ── Spawn new orbs if below target ──
     while (orbs.filter(o => o.fading !== 'out').length < targetCount) {
       const phase = bestPhaseForNewOrb();
@@ -248,6 +257,23 @@
   // DRAW
   // ============================================================
 
+  // Returns color strings for an orb — either the fixed cyan palette or a rainbow hue
+  function orbColors(orb, masterAlpha) {
+    if (!rainbowMode) {
+      return {
+        glow: (a) => `${CFG.orbGlowColor}${a})`,
+        core: (a) => `${CFG.orbCoreColor}${a})`,
+      };
+    }
+    const hue        = (globalHue + orb.hueOffset) % 360;
+    const glowBase   = `hsla(${hue.toFixed(1)}, 100%, 60%,`;
+    const coreBase   = `hsla(${hue.toFixed(1)}, 80%, 88%,`;
+    return {
+      glow: (a) => `${glowBase}${a})`,
+      core: (a) => `${coreBase}${a})`,
+    };
+  }
+
   function draw() {
     if (!ctx || !canvas) return;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -255,12 +281,13 @@
     for (const orb of orbs) {
       if (!orb.x) continue;
       const masterAlpha = orb.opacity;
+      const col = orbColors(orb, masterAlpha);
 
       // ── Draw comet trail ──
       const tLen = orb.trail.length;
       if (tLen > 1) {
         for (let i = 1; i < tLen; i++) {
-          const t     = i / tLen;            // 0 = oldest (tail tip), 1 = newest
+          const t     = i / tLen;
           const alpha = t * CFG.trailMaxAlpha * masterAlpha;
           const width = Math.max(0.5, CFG.orbRadius * t * 0.85);
 
@@ -270,7 +297,7 @@
           ctx.beginPath();
           ctx.moveTo(prev.x, prev.y);
           ctx.lineTo(curr.x, curr.y);
-          ctx.strokeStyle = `${CFG.orbGlowColor}${alpha.toFixed(3)})`;
+          ctx.strokeStyle = col.glow(alpha.toFixed(3));
           ctx.lineWidth   = width;
           ctx.lineCap     = 'round';
           ctx.stroke();
@@ -278,13 +305,10 @@
       }
 
       // ── Draw orb glow (outer radial) ──
-      const glow = ctx.createRadialGradient(
-        orb.x, orb.y, 0,
-        orb.x, orb.y, CFG.glowRadius
-      );
-      glow.addColorStop(0,   `${CFG.orbGlowColor}${(0.85 * masterAlpha).toFixed(3)})`);
-      glow.addColorStop(0.35, `${CFG.orbGlowColor}${(0.40 * masterAlpha).toFixed(3)})`);
-      glow.addColorStop(1,   `${CFG.orbGlowColor}0)`);
+      const glow = ctx.createRadialGradient(orb.x, orb.y, 0, orb.x, orb.y, CFG.glowRadius);
+      glow.addColorStop(0,    col.glow((0.85 * masterAlpha).toFixed(3)));
+      glow.addColorStop(0.35, col.glow((0.40 * masterAlpha).toFixed(3)));
+      glow.addColorStop(1,    col.glow('0'));
 
       ctx.beginPath();
       ctx.arc(orb.x, orb.y, CFG.glowRadius, 0, Math.PI * 2);
@@ -292,13 +316,10 @@
       ctx.fill();
 
       // ── Draw orb core (bright centre dot) ──
-      const core = ctx.createRadialGradient(
-        orb.x, orb.y, 0,
-        orb.x, orb.y, CFG.orbRadius
-      );
-      core.addColorStop(0,   `${CFG.orbCoreColor}${masterAlpha.toFixed(3)})`);
-      core.addColorStop(0.6, `${CFG.orbGlowColor}${(0.9 * masterAlpha).toFixed(3)})`);
-      core.addColorStop(1,   `${CFG.orbGlowColor}${(0.3 * masterAlpha).toFixed(3)})`);
+      const core = ctx.createRadialGradient(orb.x, orb.y, 0, orb.x, orb.y, CFG.orbRadius);
+      core.addColorStop(0,   col.core(masterAlpha.toFixed(3)));
+      core.addColorStop(0.6, col.glow((0.9 * masterAlpha).toFixed(3)));
+      core.addColorStop(1,   col.glow((0.3 * masterAlpha).toFixed(3)));
 
       ctx.beginPath();
       ctx.arc(orb.x, orb.y, CFG.orbRadius, 0, Math.PI * 2);
@@ -332,11 +353,22 @@
    */
   function reset() {
     targetCount = 0;
+    rainbowMode = false;
     orbs.length = 0;
     stopLoop();
   }
 
+  /**
+   * Switch colour mode.
+   * setMode('rainbow') — orbs cycle through a hue sequence (coding agent active)
+   * setMode('default') — standard cyan palette
+   */
+  function setMode(mode) {
+    rainbowMode = (mode === 'rainbow');
+    if (!rainbowMode) globalHue = 0;
+  }
+
   // Expose globally
-  global.ElectronOrbs = { setCount, reset };
+  global.ElectronOrbs = { setCount, reset, setMode };
 
 })(window);

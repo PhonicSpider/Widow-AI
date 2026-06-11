@@ -37,6 +37,75 @@ function extractSentences(buf) {
   return { sentences, remainder: buf.slice(lastIdx) };
 }
 
+// ── TTS Sanitizer ─────────────────────────────────────────────────────────────
+// Cleans Claude's raw response text before synthesis.
+// Goal: produce natural spoken English with no symbol noise.
+function sanitizeForTTS(text) {
+  let t = text;
+
+  // ── STEP 1: Markdown formatting — strip silently ──────────────────────────
+  t = t.replace(/\*{1,3}([^*]+)\*{1,3}/g, '$1');
+  t = t.replace(/_{1,2}([^_]+)_{1,2}/g, '$1');
+  t = t.replace(/`([^`]+)`/g, '$1');
+  t = t.replace(/```[\s\S]*?```/g, '');
+  t = t.replace(/~~([^~]+)~~/g, '$1');
+  t = t.replace(/^#{1,6}\s+/gm, '');
+  t = t.replace(/^[\-\*_]{3,}\s*$/gm, '');
+  t = t.replace(/^>\s*/gm, '');
+  t = t.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
+  t = t.replace(/!\[[^\]]*\]\([^)]+\)/g, '');
+  t = t.replace(/<[^>]+>/g, '');
+
+  // ── STEP 2: Decorative arrows and symbols — strip or convert ─────────────
+  t = t.replace(/→|←|↑|↓|↔|⇒|⇐|⇔|▸|▶|◀|►/g, '');
+  t = t.replace(/^[\•\·\‣\⁃\-]\s+/gm, '');
+  t = t.replace(/\[[ xX]\]\s*/g, '');
+  t = t.replace(/…/g, ', ');
+  t = t.replace(/—|–/g, ', ');
+  t = t.replace(/\|/g, ' ');
+
+  // ── STEP 3: Currency and units — convert to spoken form ──────────────────
+  t = t.replace(/\$(\d+)\.(\d{2})\b/g, (_, dollars, cents) =>
+    `${dollars} dollar${dollars === '1' ? '' : 's'} and ${cents} cents`
+  );
+  t = t.replace(/\$(\d{1,3}(?:,\d{3})*|\d+)([KkMmBb])?\b/g, (_, num, suffix) => {
+    const clean = num.replace(/,/g, '');
+    const suffixMap = { k: ' thousand', K: ' thousand', m: ' million', M: ' million', b: ' billion', B: ' billion' };
+    const spoken = suffix ? clean + (suffixMap[suffix] || '') : clean;
+    return `${spoken} dollar${clean === '1' && !suffix ? '' : 's'}`;
+  });
+  t = t.replace(/(\d+(?:\.\d+)?)\s*%/g, '$1 percent');
+  t = t.replace(/(\d+(?:\.\d+)?)\s*°C/g, '$1 degrees Celsius');
+  t = t.replace(/(\d+(?:\.\d+)?)\s*°F/g, '$1 degrees Fahrenheit');
+  t = t.replace(/(\d+(?:\.\d+)?)\s*°/g, '$1 degrees');
+  t = t.replace(/(\d+(?:\.\d+)?)\s*GB\b/gi, '$1 gigabytes');
+  t = t.replace(/(\d+(?:\.\d+)?)\s*MB\b/gi, '$1 megabytes');
+  t = t.replace(/(\d+(?:\.\d+)?)\s*KB\b/gi, '$1 kilobytes');
+
+  // ── STEP 4: Number formatting — fix misread patterns ─────────────────────
+  t = t.replace(/\b(\d{1,3}),(\d{3})\b/g, '$1$2');
+  t = t.replace(/\b(\d{1,3}),(\d{3}),(\d{3})\b/g, '$1$2$3');
+  t = t.replace(/\bv(\d+\.\d+(?:\.\d+)?)\b/g, 'version $1');
+
+  // ── STEP 5: Common symbols to spoken equivalents ──────────────────────────
+  t = t.replace(/\s&\s/g, ' and ');
+  t = t.replace(/(\d)\s*\+\s*(\d)/g, '$1 plus $2');
+  t = t.replace(/(\d)\s*[×\*]\s*(\d)/g, '$1 times $2');
+  t = t.replace(/\*/g, '');
+  t = t.replace(/#(\d+)/g, 'number $1');
+  t = t.replace(/#/g, '');
+  t = t.replace(/\s@\s/g, ' at ');
+  t = t.replace(/(\w)\/(\w)/g, '$1 or $2');
+
+  // ── STEP 6: Whitespace cleanup ────────────────────────────────────────────
+  t = t.replace(/  +/g, ' ');
+  t = t.replace(/[,\s]{2,},/g, ',');
+  t = t.split('\n').map(l => l.trim()).filter(l => l.length > 0).join(' ');
+  t = t.trim();
+
+  return t;
+}
+
 // ── Speaker ───────────────────────────────────────────────────────────────────
 //
 // Events:
@@ -234,7 +303,8 @@ class Speaker extends EventEmitter {
 
   // Enqueue a sentence for synthesis and playback.
   enqueue(text) {
-    const safe = text
+    const cleaned = sanitizeForTTS(text);
+    const safe = cleaned
       .replace(/[\uD800-\uDFFF]/g, '')  // strip lone surrogates
       .replace(/\n/g, ' ')
       .trim();
@@ -281,9 +351,17 @@ class Speaker extends EventEmitter {
   }
 
   stop() { this.cancel(); }
+
+  // True while any synthesis or playback is in progress.
+  // Used by main.js to decide if DORMANT should fire immediately on harness exit.
+  get busy() {
+    return this._synthRunning || this._playRunning ||
+           this._pendingQueue.length > 0 || this._readyQueue.length > 0;
+  }
 }
 
 const speaker = new Speaker();
 speaker.extractSentences = extractSentences;
+speaker.sanitizeForTTS   = sanitizeForTTS;  // exported for testing
 
 module.exports = speaker;

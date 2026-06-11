@@ -73,8 +73,9 @@ async function ensureChatterbox() {
   }
 }
 
-let widowWindow = null;
-let micMuted      = false;
+let widowWindow    = null;
+let micMuted       = false;
+let harnessRunning = false;  // true while chat() is executing — gates DORMANT on speaker 'done'
 
 function createWindow() {
   // Monitor 1 = rightmost non-primary = Widow's home display.
@@ -123,7 +124,11 @@ app.whenReady().then(async () => {
     if (widowWindow) widowWindow.webContents.send('widow:state', 'SPEAKING');
   });
   speaker.on('done', () => {
-    if (widowWindow) widowWindow.webContents.send('widow:state', 'DORMANT');
+    // Only go DORMANT if the harness has finished — if it's still running tools,
+    // the narration TTS ending should not drop us out of WORKING state.
+    if (widowWindow && !harnessRunning) {
+      widowWindow.webContents.send('widow:state', 'DORMANT');
+    }
   });
 
   // ── Mic mute toggle — Right Control + NumPad 5 ──────────────────────────────
@@ -204,6 +209,7 @@ app.on('window-all-closed', () => {
 
 // Main chat handler — renderer sends a message, harness responds
 ipcMain.handle('harness:chat', async (_event, userMessage) => {
+  harnessRunning = true;
   try {
     speaker.cancel(); // Cut any ongoing TTS immediately on new input
     widowWindow.webContents.send('widow:state', 'THINKING');
@@ -243,6 +249,13 @@ ipcMain.handle('harness:chat', async (_event, userMessage) => {
     widowWindow.webContents.send('widow:state', 'DORMANT');
     widowWindow.webContents.send('harness:response', { userMessage, response: `[Error: ${err.message}]` });
     return { success: false, error: err.message };
+  } finally {
+    harnessRunning = false;
+    // If TTS already drained while the harness was mid-run (speaker.on('done') was
+    // suppressed), it won't fire again — send DORMANT here to avoid getting stuck.
+    if (!speaker.busy && widowWindow) {
+      widowWindow.webContents.send('widow:state', 'DORMANT');
+    }
   }
 });
 

@@ -1,9 +1,10 @@
 require('dotenv').config();
 
 const Anthropic   = require('@anthropic-ai/sdk');
+const fs          = require('fs');
 const path        = require('path');
 const { spawn }   = require('child_process');
-const { readFile, writeFile, listDirectory } = require('../tools/files');
+const { readFile, writeFile, listDirectory, readFileRange, strReplace, appendFile } = require('../tools/files');
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -12,15 +13,18 @@ const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 // ============================================================
 
 const CFG = {
-  // Model used for coding sub-agent turns
   model:          'claude-sonnet-4-6',
-  maxTokens:      4096,
-
-  // Shell execution timeout (ms) — applies to each shell_exec call
+  maxTokens:      8192,  // str_replace outputs are tiny; even full file writes rarely exceed 4k tokens
   shellTimeoutMs: 30_000,
+
+  // Context compaction — keeps the last N tool-result batches at full size;
+  // older ones are trimmed to stay under the 30k input tokens/min rate limit.
+  compactKeepRecent: 2,   // only the 2 most recent results stay full — older get compacted
+  compactMaxChars:   600, // matches harness history limit; enough to know what happened
 };
 
-const WIDOW_ROOT = path.resolve(__dirname, '../..');
+const WIDOW_ROOT  = path.resolve(__dirname, '../..');
+const BACKUP_DIR  = path.join(WIDOW_ROOT, '.widow-backups'); // single folder, no scatter
 
 // Files that must be backed up before overwriting
 const CORE_FILES = new Set([
@@ -45,9 +49,12 @@ function isCoreFile(filePath) {
 }
 
 function backupPath(filePath) {
-  const ext  = path.extname(filePath);
-  const base = filePath.slice(0, -ext.length);
-  return `${base}.backup${ext}`;
+  // Mirror the relative path inside .widow-backups/ so structure is preserved.
+  // e.g. src/agents/harness.js → .widow-backups/src/agents/harness.js
+  // One backup per file (same path = always overwrites the previous one).
+  const abs = path.isAbsolute(filePath) ? filePath : path.join(WIDOW_ROOT, filePath);
+  const rel = path.relative(WIDOW_ROOT, abs);
+  return path.join(BACKUP_DIR, rel);
 }
 
 // ============================================================
@@ -68,12 +75,50 @@ const CODING_TOOL_DEFINITIONS = [
   },
   {
     name: 'write_file',
-    description: 'Write or overwrite a file. For any Widow core file a backup is automatically created at filename.backup.ext before saving. Creates parent directories if needed.',
+    description: 'Write or overwrite a file. For any Widow core file a backup is automatically created at References\\filename.backup.ext before saving. Creates parent directories if original file had it as needed.',
     input_schema: {
       type: 'object',
       properties: {
         path:    { type: 'string', description: 'Absolute path to write to' },
         content: { type: 'string', description: 'Full file content to write' },
+      },
+      required: ['path', 'content'],
+    },
+  },
+  {
+    name: 'str_replace',
+    description: 'The PRIMARY editing tool. Makes a surgical replacement in a file — finds oldStr and replaces it with newStr. oldStr must match exactly once in the file. Always prefer this over write_file when editing existing code — only rewrite the section that changes, not the whole file. Read the file first so your oldStr matches exactly.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        path:   { type: 'string', description: 'Absolute path to the file' },
+        oldStr: { type: 'string', description: 'The exact string to find and replace. Must be unique in the file. Include enough surrounding context (function signature, nearby lines) to make it unique.' },
+        newStr: { type: 'string', description: 'The replacement string. Can be empty string to delete.' },
+      },
+      required: ['path', 'oldStr', 'newStr'],
+    },
+  },
+  {
+    name: 'read_file_range',
+    description: 'Read only a range of lines from a file. Use when a file is large (over 300 lines) and you only need a specific section. Returns line numbers so you can navigate the file in chunks.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        path:      { type: 'string', description: 'Absolute path to the file' },
+        startLine: { type: 'integer', description: 'First line to read (1-indexed)' },
+        endLine:   { type: 'integer', description: 'Last line to read (inclusive). Omit to read to end of file.' },
+      },
+      required: ['path', 'startLine'],
+    },
+  },
+  {
+    name: 'append_file',
+    description: 'Append content to the end of an existing file without overwriting it. Use for the second and subsequent chunks when writing a large new file — write the first chunk with write_file, then append the rest.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        path:    { type: 'string', description: 'Absolute path to append to' },
+        content: { type: 'string', description: 'Content to append' },
       },
       required: ['path', 'content'],
     },
@@ -161,15 +206,32 @@ async function executeCodingTool(name, input) {
       return listDirectory(input.path);
 
     case 'write_file': {
-      // Auto-backup before overwriting any core file
-      if (isCoreFile(input.path)) {
-        const existing = readFile(input.path);
-        if (!existing.error) {
-          const bak = backupPath(input.path);
-          writeFile(bak, existing.content);
-          console.log(`[Coding] Backed up ${input.path} → ${bak}`);
+      const abs = path.isAbsolute(input.path) ? input.path : path.join(WIDOW_ROOT, input.path);
+
+      if (fs.existsSync(abs)) {
+        const diskContent = fs.readFileSync(abs, 'utf8');
+        const diskLen     = Buffer.byteLength(diskContent, 'utf8');
+        const newLen      = Buffer.byteLength(input.content, 'utf8');
+
+        // Truncation guard: if the proposed write would shrink the file by 40%+, the agent
+        // is almost certainly working from a compacted/truncated memory stub. Block it.
+        if (diskLen > 500 && newLen < diskLen * 0.6) {
+          return {
+            error:         'WRITE_BLOCKED',
+            reason:        `Proposed content (${newLen} bytes) is less than 60% of the current file on disk (${diskLen} bytes). You are likely working from a stale or truncated version of this file in memory. Use read_file to fetch the current content, apply your edits to the full text, then write again.`,
+            diskBytes:     diskLen,
+            proposedBytes: newLen,
+          };
+        }
+
+        // Core file: save a single backup (overwrites the previous backup each time)
+        if (isCoreFile(input.path)) {
+          const bak = backupPath(abs);
+          writeFile(bak, diskContent);
+          console.log(`[Coding] Backed up → ${bak}`);
         }
       }
+
       return writeFile(input.path, input.content);
     }
 
@@ -177,6 +239,15 @@ async function executeCodingTool(name, input) {
       const cwd = input.cwd || WIDOW_ROOT;
       return shellExec(input.command, cwd);
     }
+
+    case 'str_replace':
+      return strReplace(input.path, input.oldStr, input.newStr);
+
+    case 'read_file_range':
+      return readFileRange(input.path, input.startLine, input.endLine);
+
+    case 'append_file':
+      return appendFile(input.path, input.content);
 
     default:
       return { error: `Unknown coding tool: ${name}` };
@@ -188,42 +259,119 @@ async function executeCodingTool(name, input) {
 // ============================================================
 
 function buildSystemPrompt(rootStructure) {
-  return `You are a coding specialist agent running inside Widow — a Jarvis-style AI companion built with Electron, Node.js, and the Claude API. You were delegated this task by Widow's main harness.
+  // Compact flat list — much cheaper than pretty-printed JSON
+  const dirList = rootStructure.entries
+    .map(e => `  ${e.type === 'dir' ? '[dir] ' : '[file]'} ${e.name}`)
+    .join('\n');
 
-Stack: Electron v29, Node.js (CommonJS), Anthropic SDK, Three.js (orb), edge-tts + faster-whisper (Python), Win32 ctypes (window management), PowerShell on Windows 11.
+  return `You are a coding specialist agent inside Widow — a Jarvis-style AI companion (Electron, Node.js, Claude API).
 
-Widow root: ${WIDOW_ROOT}
+Root: ${WIDOW_ROOT}
+Key files:
+  main.js                  Electron main process, IPC handlers
+  preload.js               contextBridge
+  src/agents/harness.js    main Claude harness
+  src/agents/personality.js Widow personality/system prompt
+  src/agents/coding.js     you (this file)
+  src/tools/index.js       tool router
+  src/tools/files.js       file I/O (80 KB read cap)
+  src/tools/web.js         web search
+  renderer/js/main.js      UI state machine
+  renderer/css/main.css    ember palette
+  renderer/index.html      UI structure
 
-Key source files:
-  main.js                   — Electron main process, window creation, IPC handlers
-  preload.js                — contextBridge exposing APIs to renderer
-  src/agents/harness.js     — main Claude harness, conversation history, tool-use loop
-  src/agents/personality.js — Widow's personality / system prompt
-  src/agents/coding.js      — you (this file)
-  src/tools/index.js        — TOOL_DEFINITIONS + executeTool router
-  src/tools/system.js       — OS tools: monitors, window snapping, app launch
-  src/tools/files.js        — file I/O helpers
-  src/tools/web.js          — web search
-  renderer/js/main.js       — UI state machine and IPC listeners
-  renderer/css/main.css     — ember/orb palette styles
-  renderer/index.html       — UI structure, side panel, webview
-  scripts/window_place.py   — Win32 window snap helper (Python + ctypes)
-  scripts/tts_speak.py      — persistent TTS daemon
-  memory/                   — persisted conversation history + summary
+FILE EDITING STRATEGY — follow this precisely:
 
-SELF-EDITING RULES:
-1. Always read_file before editing any existing file.
-2. write_file automatically backs up core files to filename.backup.ext — do not do it manually.
-3. Never delete backup files.
-4. After editing, confirm exactly what changed and where.
+READING FILES:
+- Always read_file before editing any existing file. Never assume you know the current content.
+- For files over 300 lines, use read_file_range to read in chunks (e.g. lines 1-150, then 151-300).
+  The result tells you totalLines so you know how many chunks to read.
+- After reading, note the exact indentation, quote style, and surrounding code before making changes.
 
-For general coding tasks (scripts, tools, utilities) unrelated to Widow: help freely, write clean code, use the user's existing stack where relevant.
-Only read RSM or other external project files if explicitly asked.
+EDITING EXISTING FILES — use str_replace (preferred):
+- str_replace is your primary editing tool. It makes surgical replacements without touching anything else.
+- oldStr must match exactly once — include enough surrounding lines (function signature, nearby comments)
+  to make it unique. If the replacement fails with "found 0 times", your spacing or indentation is off —
+  re-read that section of the file and copy exactly.
+- Only fall back to write_file for existing files if you need to restructure more than 60% of the file.
+- write_file is protected by a truncation guard: if your proposed content is less than 60% the size of
+  the file on disk it returns WRITE_BLOCKED. Use read_file to get the full current content, apply your
+  edits to the full text, then write again.
 
-Return a clear, concise summary of what you did. Widow's harness will speak this response aloud, so keep it natural-language friendly — no raw JSON dumps, no excessive markdown headers.
+WRITING NEW FILES — use write_file + append_file for large files:
+- Files under 250 lines: write in one write_file call.
+- Files 250-600 lines: write first half with write_file, append second half with append_file.
+- Files over 600 lines: write in three or more chunks — write_file for the first, append_file for each subsequent chunk.
+- Always end each chunk at a logical boundary (end of a function, end of a block) — never mid-expression.
 
-Current Widow directory:
-${JSON.stringify(rootStructure, null, 2)}`;
+VERIFICATION — always verify after writing:
+- After any write_file or append_file, call read_file_range on the last 20 lines to confirm the file
+  ends correctly and is not truncated.
+- After any str_replace, call read_file_range around the changed lines to confirm the replacement looks right.
+- If the file ends abruptly or is missing closing braces, use append_file to add the missing content.
+
+BACKUP:
+- Core files are automatically backed up to .widow-backups/ before each overwrite (one backup per file).
+- Never delete backup files.
+
+NARRATION:
+- Before each tool call write one short sentence (max 12 words) saying what you are about to do. Example: "Reading the harness to understand the current flow."
+- End with a short plain-English summary (spoken aloud by Widow — no JSON or markdown headers).
+
+Widow root contents:
+${dirList}`;
+}
+
+// ============================================================
+// CONTEXT COMPACTION
+// Keeps the last N tool-result batches at full size; truncates
+// older ones so the context window doesn't balloon with file dumps.
+// ============================================================
+
+function compactOldResults(messages) {
+  const batchIndices = messages.reduce((acc, m, i) => {
+    if (m.role === 'user' && Array.isArray(m.content) &&
+        m.content.some(b => b.type === 'tool_result')) acc.push(i);
+    return acc;
+  }, []);
+
+  if (batchIndices.length <= CFG.compactKeepRecent) return messages;
+
+  const toCompact = new Set(batchIndices.slice(0, -CFG.compactKeepRecent));
+
+  return messages.map((m, i) => {
+    if (!toCompact.has(i)) return m;
+    return {
+      ...m,
+      content: m.content.map(b => {
+        if (b.type !== 'tool_result') return b;
+        const raw = typeof b.content === 'string' ? b.content : JSON.stringify(b.content);
+        if (raw.length <= CFG.compactMaxChars) return b;
+        return { ...b, content: raw.slice(0, CFG.compactMaxChars) + '\n[truncated — use read_file if you need the rest]' };
+      }),
+    };
+  });
+}
+
+// ============================================================
+// RATE LIMIT RETRY — waits for retry-after then retries up to 3x
+// ============================================================
+
+async function withRetry(fn, label, onProgress, maxRetries = 3) {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (err.status === 429 && attempt < maxRetries) {
+        const wait = parseInt(err.headers?.['retry-after'] || '60', 10);
+        console.warn(`[Coding agent] 429 rate limit — waiting ${wait}s (retry ${attempt + 1}/${maxRetries})`);
+        onProgress?.(`⏳ rate limit hit — waiting ${wait}s before retry...`);
+        await new Promise(r => setTimeout(r, wait * 1000));
+        continue;
+      }
+      throw err;
+    }
+  }
 }
 
 // ============================================================
@@ -239,20 +387,42 @@ async function run(task, context, onProgress) {
   messages.push({ role: 'user', content: userContent });
 
   let finalResponse = '';
-  const MAX_ITERATIONS = 30;
+  const MAX_ITERATIONS = 15;
   let iterations = 0;
+
+  // Build system prompt once; wrap in an array so cache_control is honoured —
+  // Anthropic caches the system prompt after the first call, saving input tokens
+  // on every subsequent iteration of the loop.
+  const systemPrompt = [{
+    type:          'text',
+    text:          buildSystemPrompt(rootStructure),
+    cache_control: { type: 'ephemeral' },
+  }];
 
   try {
     while (iterations++ < MAX_ITERATIONS) {
-      const response = await client.messages.create({
-        model:      CFG.model,
-        max_tokens: CFG.maxTokens,
-        system:     buildSystemPrompt(rootStructure),
-        tools:      CODING_TOOL_DEFINITIONS,
-        messages,
-      });
+      const response = await withRetry(
+        async () => {
+          // Must use streaming — messages.create() refuses requests with high max_tokens
+          // (estimated >10 min) and the SDK throws before even sending the request.
+          const stream = client.messages.stream({
+            model:      CFG.model,
+            max_tokens: CFG.maxTokens,
+            system:     systemPrompt,
+            tools:      CODING_TOOL_DEFINITIONS,
+            messages,
+          });
+          return stream.finalMessage();
+        },
+        'coding', onProgress,
+      );
 
       if (response.stop_reason === 'tool_use') {
+        // Emit any narration text the model wrote before the tool calls
+        const narration = response.content
+          .filter(b => b.type === 'text').map(b => b.text).join('').trim();
+        if (narration) onProgress?.(`» ${narration}`);
+
         messages.push({ role: 'assistant', content: response.content });
 
         const toolUseBlocks = response.content.filter(b => b.type === 'tool_use');
@@ -274,6 +444,11 @@ async function run(task, context, onProgress) {
         }
 
         messages.push({ role: 'user', content: toolResults });
+
+        // Compact old tool results so the context window doesn't grow unboundedly
+        const compacted = compactOldResults(messages);
+        messages.splice(0, messages.length, ...compacted);
+
         continue;
       }
 

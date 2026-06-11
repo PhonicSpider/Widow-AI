@@ -1,6 +1,6 @@
 const { webSearch } = require('./web');
 const { getTime, getClipboard, getSystemInfo, openApp, openNativeInPanel, moveWindow, moveWidowToMonitor, getPanelBounds, getDisplayMap, getDisplayBounds, getSnapBounds, restartWidow, reloadRenderer } = require('./system');
-const { readFile, writeFile, listDirectory, moveFile, copyFile, deleteFile } = require('./files');
+const { readFile, writeFile, listDirectory, moveFile, copyFile, deleteFile, readFileRange, strReplace, appendFile } = require('./files');
 const { click, dblClick, rClick, moveMouse, scroll, drag, typeText, keyPress, getCursor, screenshot, findClick } = require('./desktop');
 const { searchGitHub, getGitHubFile, createGitHubIssue, getGitHubIssues, getPRStatus } = require('./github');
 const state = require('../state');
@@ -56,8 +56,34 @@ const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: 'str_replace',
+    description: "Make a surgical edit to a file — finds oldStr and replaces it with newStr. oldStr must match exactly once in the file. Use this for targeted changes to existing files instead of rewriting the whole file. Always read the relevant section first so oldStr matches exactly.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        path:   { type: 'string', description: 'Absolute path to the file' },
+        oldStr: { type: 'string', description: 'The exact text to replace. Must appear exactly once in the file. Include enough surrounding context (nearby lines, function signature) to make it unique.' },
+        newStr: { type: 'string', description: 'The replacement text. Can be empty string to delete.' },
+      },
+      required: ['path', 'oldStr', 'newStr'],
+    },
+  },
+  {
+    name: 'read_file_range',
+    description: "Read only a specific range of lines from a file. Use when you only need a section of a large file — avoids loading the whole file into context. Returns line numbers so you can read further chunks if needed.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        path:      { type: 'string', description: 'Absolute path to the file' },
+        startLine: { type: 'integer', description: 'First line to read (1-indexed)' },
+        endLine:   { type: 'integer', description: 'Last line to read (inclusive). Omit to read to end of file.' },
+      },
+      required: ['path', 'startLine'],
+    },
+  },
+  {
     name: 'write_file',
-    description: "Write or overwrite a file on Phonic's system. Creates parent directories if needed.",
+    description: "Write or overwrite a file on Phonic's system. Creates parent directories if needed. For editing existing files prefer str_replace instead — only use write_file for new files or complete rewrites.",
     input_schema: {
       type: 'object',
       properties: {
@@ -368,6 +394,7 @@ const WEB_APP_MAP = {
 };
 
 async function executeTool(name, input, onPanel, onConsoleLog) {
+  const path = require('path');
   switch (name) {
 
     case 'web_search': {
@@ -436,12 +463,14 @@ async function executeTool(name, input, onPanel, onConsoleLog) {
     case 'get_clipboard':   return getClipboard();
     case 'get_system_info': return getSystemInfo();
 
-    case 'read_file':       return readFile(input.path);
-    case 'write_file':      return writeFile(input.path, input.content);
-    case 'list_directory':  return listDirectory(input.path);
-    case 'move_file':       return moveFile(input.from, input.to);
-    case 'copy_file':       return copyFile(input.from, input.to);
-    case 'delete_file':     return deleteFile(input.path);
+    case 'read_file':         return readFile(input.path);
+    case 'read_file_range':   return readFileRange(input.path, input.startLine, input.endLine);
+    case 'str_replace':       return strReplace(input.path, input.oldStr, input.newStr);
+    case 'write_file':        return writeFile(input.path, input.content);
+    case 'list_directory':    return listDirectory(input.path);
+    case 'move_file':         return moveFile(input.from, input.to);
+    case 'copy_file':         return copyFile(input.from, input.to);
+    case 'delete_file':       return deleteFile(input.path);
 
     case 'open_app': {
       const key    = input.name.toLowerCase().trim();
@@ -477,7 +506,39 @@ async function executeTool(name, input, onPanel, onConsoleLog) {
       };
       const factory = AGENTS[input.agent];
       if (!factory) return { error: `Unknown agent: ${input.agent}` };
-      return factory().run(input.task, input.context, onConsoleLog);
+
+      // Pre-read any files mentioned in the task so the coding agent has full
+      // context on turn 1 without spending a round-trip on read_file calls.
+      let enrichedContext = input.context || '';
+      if (input.agent === 'coding') {
+        const WIDOW_ROOT   = path.resolve(__dirname, '../..');
+        const pathPattern  = /([A-Za-z]:[\\/][\w\\/.\-]+\.\w+|(?:src|renderer|scripts|main|preload)[\\/][\w\\/.\-]+\.\w+)/g;
+        const matches      = [...new Set([
+          ...(input.task.match(pathPattern) || []),
+          ...(enrichedContext.match(pathPattern) || []),
+        ])];
+
+        const fileSnippets = [];
+        for (const rawPath of matches) {
+          const absPath = path.isAbsolute(rawPath) ? rawPath : path.join(WIDOW_ROOT, rawPath);
+          const result  = readFile(absPath);
+          if (!result.error) {
+            if (result.lines <= 300) {
+              fileSnippets.push(`\n\n--- PRE-READ: ${absPath} (${result.lines} lines) ---\n${result.content}\n--- END ---`);
+            } else {
+              const preview = result.content.split('\n').slice(0, 150).join('\n');
+              fileSnippets.push(`\n\n--- PRE-READ: ${absPath} (${result.lines} lines — large, showing first 150) ---\n${preview}\n--- Use read_file_range to read more sections ---`);
+            }
+          }
+        }
+
+        if (fileSnippets.length > 0) {
+          enrichedContext = (enrichedContext ? enrichedContext + '\n' : '') +
+            'Files referenced in this task (pre-read for you):' + fileSnippets.join('');
+        }
+      }
+
+      return factory().run(input.task, enrichedContext, onConsoleLog);
     }
 
     // ── Desktop automation ────────────────────────────────────────────────────

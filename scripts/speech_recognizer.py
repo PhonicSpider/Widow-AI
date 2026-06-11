@@ -37,7 +37,7 @@ PRE_ROLL_CHUNKS    = 5    # chunks prepended before speech onset to avoid clippi
 WHISPER_MODEL = "base.en"
 
 # -- Wake / sleep phrases ---------------------------------------
-WAKE_GRAMMAR  = '["widow", "hey widow", "[unk]"]'
+WAKE_GRAMMAR  = '["widow", "hey widow", "good evening widow", "good afternoon widow", "[unk]"]'
 SLEEP_PHRASES = ['goodnight widow', 'good night widow', 'goodbye widow', 'good bye widow']
 
 # -- Paths ------------------------------------------------------

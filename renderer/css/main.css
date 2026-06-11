@@ -319,6 +319,17 @@ body.in-session #status-text:not(.active) {
   border-left: 2px solid var(--red);
 }
 
+/* Step narrations emitted during tool use — dimmer, smaller, no border */
+.transcript-line.working {
+  color: var(--text-dim);
+  font-size: 14px;
+  font-style: italic;
+  text-align: left;
+  padding-left: 10px;
+  opacity: 0;
+  animation: line-appear 0.3s ease forwards;
+}
+
 @keyframes line-appear {
   to { opacity: 1; transform: translateY(0); }
 }
@@ -693,9 +704,8 @@ body.panel-open #sys-console {
   right: 62vw;
 }
 
-/* Hidden when console toggle is off, unless Widow is in an active processing state */
-body.console-hidden:not(.state-active) #sys-console,
-#sys-console.sys-console-hidden {
+/* Hidden only when toggle is off AND no active state AND no tools running */
+body.console-hidden:not(.state-active):not(.tools-active) #sys-console {
   opacity: 0;
 }
 

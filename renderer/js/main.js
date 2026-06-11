@@ -55,11 +55,33 @@ devToggle.addEventListener('click', () => {
 // an activeToolCount and drive the electron orb display.
 
 let activeToolCount = 0;
+let codingToolCount = 0;   // ▸ coding: / ✓ coding: pairs — drives rainbow mode
+let orbClearTimer   = null;
 
 function setActiveToolCount(n) {
   activeToolCount = Math.max(0, n);
+
+  if (activeToolCount > 0) {
+    clearTimeout(orbClearTimer);
+    orbClearTimer = null;
+    document.body.classList.add('tools-active');
+    if (window.ElectronOrbs) ElectronOrbs.setCount(activeToolCount);
+  } else {
+    clearTimeout(orbClearTimer);
+    orbClearTimer = setTimeout(() => {
+      orbClearTimer = null;
+      if (activeToolCount === 0) {
+        document.body.classList.remove('tools-active');
+        if (window.ElectronOrbs) ElectronOrbs.setCount(0);
+      }
+    }, 1500);
+  }
+}
+
+function updateCodingMode(delta) {
+  codingToolCount = Math.max(0, codingToolCount + delta);
   if (window.ElectronOrbs) {
-    ElectronOrbs.setCount(activeToolCount);
+    ElectronOrbs.setMode(codingToolCount > 0 ? 'rainbow' : 'default');
   }
 }
 
@@ -99,10 +121,14 @@ function setState(state) {
   }
   if (window.Orb3D) Orb3D.setState(state);
 
-  // When fully dormant: reset electron orbs and tool counter so nothing lingers
-  // (guards against any missed ✓ completions or error paths)
+  // When fully dormant: clear everything — cancels any debounce timer first
+  // so the hold delay doesn't re-show orbs after state is already DORMANT
   if (state === State.DORMANT) {
+    clearTimeout(orbClearTimer);
+    orbClearTimer   = null;
     activeToolCount = 0;
+    codingToolCount = 0;
+    document.body.classList.remove('tools-active');
     if (window.ElectronOrbs) ElectronOrbs.reset();
   }
 
@@ -304,10 +330,13 @@ function appendConsoleLine(msg) {
   // ── Electron orb tracking ──
   // '▸' prefix = tool started  → increment active tool count
   // '✓' prefix = tool finished → decrement active tool count
+  // '▸ coding:' / '✓ coding:' sub-prefix → switch to rainbow mode
   if (msg.startsWith('▸')) {
     setActiveToolCount(activeToolCount + 1);
+    if (msg.startsWith('▸ coding:')) updateCodingMode(+1);
   } else if (msg.startsWith('✓')) {
     setActiveToolCount(activeToolCount - 1);
+    if (msg.startsWith('✓ coding:')) updateCodingMode(-1);
   }
 }
 
@@ -345,9 +374,13 @@ if (window.widow) {
     setState(currentState);
   });
 
-  // Harness tool-execution log lines → sys-console overlay + electron orb counter
+  // Harness tool-execution log lines → sys-console overlay + electron orb counter.
+  // Lines prefixed with '» ' are step narrations — also shown in the transcript.
   window.widow.onConsoleLog((msg) => {
     appendConsoleLine(msg);
+    if (msg.startsWith('» ')) {
+      addTranscriptLine(msg.slice(2).trim(), 'working');
+    }
   });
 
   window.widow.onMuteChange((muted) => {
