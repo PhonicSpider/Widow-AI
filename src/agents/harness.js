@@ -79,12 +79,19 @@ function makeGeminiAdapter() {
     return messages.map(m => ({
       role:  m.role === 'assistant' ? 'model' : 'user',
       parts: Array.isArray(m.content)
-        ? m.content.map(c => ({
-            functionResponse: {
-              name:     c.tool_name || c.tool_use_id,
-              response: { result: c.content },
-            },
-          }))
+        ? m.content.flatMap(c => {
+            const parts = [{
+              functionResponse: {
+                name:     c.tool_name || c.tool_use_id,
+                response: { result: c.content },
+              },
+            }];
+            // Vision: attach screenshot image so Gemini can see it
+            if (c._imageBase64) {
+              parts.push({ inlineData: { mimeType: c._imageMimeType || 'image/png', data: c._imageBase64 } });
+            }
+            return parts;
+          })
         : [{ text: m.content }],
     }));
   }
@@ -137,6 +144,22 @@ function makeGeminiAdapter() {
     },
 
     formatToolResult(id, content, name) {
+      // Vision — embed screenshot so Gemini can see what's on screen
+      if (name === 'take_screenshot' && content?.path && !content?.error) {
+        try {
+          const base64 = fs.readFileSync(content.path).toString('base64');
+          return {
+            type:           'tool_result',
+            tool_use_id:    id,
+            tool_name:      name,
+            content:        JSON.stringify({ path: content.path, width: content.width, height: content.height, note: 'Screenshot shown — you can see it.' }),
+            _imageBase64:   base64,
+            _imageMimeType: 'image/png',
+          };
+        } catch (err) {
+          console.warn('[Vision/Gemini] Could not embed screenshot:', err.message);
+        }
+      }
       return { type: 'tool_result', tool_use_id: id, tool_name: name, content: JSON.stringify(content) };
     },
   };
@@ -343,9 +366,12 @@ function truncateForHistory(messages) {
       ...m,
       content: m.content.map(b => {
         if (b.type !== 'tool_result') return b;
-        const raw = typeof b.content === 'string' ? b.content : JSON.stringify(b.content);
-        if (raw.length <= HISTORY_RESULT_LIMIT) return b;
-        return { ...b, content: raw.slice(0, HISTORY_RESULT_LIMIT) + '\n…[truncated for memory]' };
+        // Strip embedded image data — too large to persist, not needed for future turns
+        // eslint-disable-next-line no-unused-vars
+        const { _imageBase64, _imageMimeType, ...rest } = b;
+        const raw = typeof rest.content === 'string' ? rest.content : JSON.stringify(rest.content);
+        if (raw.length <= HISTORY_RESULT_LIMIT) return rest;
+        return { ...rest, content: raw.slice(0, HISTORY_RESULT_LIMIT) + '\n…[truncated for memory]' };
       }),
     };
   });
@@ -527,6 +553,16 @@ async function chat(userMessage, { onPanel, onSentence, onConsoleLog, onStateCha
           await new Promise(r => setTimeout(r, wait * 1000));
           continue;
         }
+        // Surface the error in Widow's console panel before propagating so the
+        // log entry appears even if the catch block in main.js runs a moment later.
+        const statusTag = err.status ? ` ${err.status}` : '';
+        let detail = err.message || String(err);
+        // Anthropic SDK wraps the raw body — try to extract a readable message
+        try {
+          const parsed = typeof err.error === 'object' ? err.error : JSON.parse(err.error || '{}');
+          if (parsed?.error?.message) detail = parsed.error.message;
+        } catch { /* ignore */ }
+        onConsoleLog?.(`✗ API error${statusTag}: ${detail.slice(0, 200)}`);
         throw err;
       }
     }

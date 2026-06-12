@@ -1,20 +1,16 @@
 require('dotenv').config();
 
-const Anthropic   = require('@anthropic-ai/sdk');
 const fs          = require('fs');
 const path        = require('path');
 const { spawn }   = require('child_process');
 const { readFile, writeFile, listDirectory, readFileRange, strReplace, appendFile } = require('../tools/files');
-
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const { createSubagentAdapter } = require('../lib/subagent');
 
 // ============================================================
 // CONFIGURATION
 // ============================================================
 
 const CFG = {
-  model:          'claude-sonnet-4-6',
-  maxTokens:      8192,  // str_replace outputs are tiny; even full file writes rarely exceed 4k tokens
   shellTimeoutMs: 30_000,
 
   // Context compaction — keeps the last N tool-result batches at full size;
@@ -362,9 +358,10 @@ async function withRetry(fn, label, onProgress, maxRetries = 3) {
     try {
       return await fn();
     } catch (err) {
-      if (err.status === 429 && attempt < maxRetries) {
+      const isRateLimit = err.status === 429 || err.message?.includes('429') || err.message?.includes('quota');
+      if (isRateLimit && attempt < maxRetries) {
         const wait = parseInt(err.headers?.['retry-after'] || '60', 10);
-        console.warn(`[Coding agent] 429 rate limit — waiting ${wait}s (retry ${attempt + 1}/${maxRetries})`);
+        console.warn(`[Coding agent] rate limit — waiting ${wait}s (retry ${attempt + 1}/${maxRetries})`);
         onProgress?.(`⏳ rate limit hit — waiting ${wait}s before retry...`);
         await new Promise(r => setTimeout(r, wait * 1000));
         continue;
@@ -381,6 +378,9 @@ async function withRetry(fn, label, onProgress, maxRetries = 3) {
 async function run(task, context, onProgress) {
   const rootStructure = listDirectory(WIDOW_ROOT);
 
+  const adapter     = createSubagentAdapter();
+  const systemPrompt = buildSystemPrompt(rootStructure);
+
   const messages = [];
   let userContent = `Task: ${task}`;
   if (context) userContent += `\n\nContext: ${context}`;
@@ -390,30 +390,10 @@ async function run(task, context, onProgress) {
   const MAX_ITERATIONS = 15;
   let iterations = 0;
 
-  // Build system prompt once; wrap in an array so cache_control is honoured —
-  // Anthropic caches the system prompt after the first call, saving input tokens
-  // on every subsequent iteration of the loop.
-  const systemPrompt = [{
-    type:          'text',
-    text:          buildSystemPrompt(rootStructure),
-    cache_control: { type: 'ephemeral' },
-  }];
-
   try {
     while (iterations++ < MAX_ITERATIONS) {
       const response = await withRetry(
-        async () => {
-          // Must use streaming — messages.create() refuses requests with high max_tokens
-          // (estimated >10 min) and the SDK throws before even sending the request.
-          const stream = client.messages.stream({
-            model:      CFG.model,
-            max_tokens: CFG.maxTokens,
-            system:     systemPrompt,
-            tools:      CODING_TOOL_DEFINITIONS,
-            messages,
-          });
-          return stream.finalMessage();
-        },
+        () => adapter.complete(messages, systemPrompt, CODING_TOOL_DEFINITIONS),
         'coding', onProgress,
       );
 
@@ -436,11 +416,7 @@ async function run(task, context, onProgress) {
           const result = await executeCodingTool(block.name, block.input);
 
           onProgress?.(`✓ coding: ${block.name} — done`);
-          toolResults.push({
-            type:        'tool_result',
-            tool_use_id: block.id,
-            content:     JSON.stringify(result),
-          });
+          toolResults.push(adapter.toolResult(block.id, block.name, result));
         }
 
         messages.push({ role: 'user', content: toolResults });

@@ -205,4 +205,55 @@ $results | Select-Object -First ${maxResults} | ConvertTo-Json -Compress
   });
 }
 
-module.exports = { readFile, writeFile, listDirectory, moveFile, copyFile, deleteFile, readFileRange, strReplace, appendFile, searchPath };
+// Download a file from a URL or save a data URL (base64) to disk.
+// Handles http, https, and data: URLs. Follows redirects automatically.
+async function downloadFile(url, destPath, { timeoutMs = 60_000 } = {}) {
+  try {
+    fs.mkdirSync(path.dirname(destPath), { recursive: true });
+
+    // data: URL — decode base64 and write binary directly
+    if (url.startsWith('data:')) {
+      const match = url.match(/^data:([^;]+);base64,(.+)$/s);
+      if (!match) return { error: 'Invalid data URL format' };
+      const buffer = Buffer.from(match[2], 'base64');
+      fs.writeFileSync(destPath, buffer);
+      return { success: true, path: destPath, bytes: buffer.length, mimeType: match[1] };
+    }
+
+    // http/https URL — stream to file with redirect following (up to 5 hops)
+    return new Promise((resolve) => {
+      let hops = 0;
+
+      function fetch(currentUrl) {
+        const lib = currentUrl.startsWith('https') ? require('https') : require('http');
+        const req = lib.get(currentUrl, (res) => {
+          if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location) {
+            res.resume();
+            if (++hops > 5) return resolve({ error: 'Too many redirects' });
+            return fetch(res.headers.location);
+          }
+          if (res.statusCode < 200 || res.statusCode >= 300) {
+            res.resume();
+            return resolve({ error: `HTTP ${res.statusCode}` });
+          }
+          const stream = fs.createWriteStream(destPath);
+          res.pipe(stream);
+          stream.on('finish', () => {
+            const bytes = fs.statSync(destPath).size;
+            resolve({ success: true, path: destPath, bytes, status: res.statusCode });
+          });
+          stream.on('error', err => resolve({ error: err.message }));
+        });
+        req.setTimeout(timeoutMs, () => { req.destroy(); resolve({ error: `timeout after ${timeoutMs}ms` }); });
+        req.on('error', err => resolve({ error: err.message }));
+      }
+
+      fetch(url);
+    });
+
+  } catch (err) {
+    return { error: err.message, path: destPath };
+  }
+}
+
+module.exports = { readFile, writeFile, downloadFile, listDirectory, moveFile, copyFile, deleteFile, readFileRange, strReplace, appendFile, searchPath };

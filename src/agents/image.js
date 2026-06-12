@@ -1,12 +1,10 @@
 require('dotenv').config();
 
-const Anthropic = require('@anthropic-ai/sdk');
+const fs       = require('fs');
+const path     = require('path');
+const os       = require('os');
+const { createSubagentAdapter } = require('../lib/subagent');
 const { generateImage } = require('../tools/web');
-
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-
-// Haiku is fast and cheap — perfect for prompt refinement with no tool loop
-const MODEL = 'claude-haiku-4-5-20251001';
 
 const SYSTEM_PROMPT = `You are an image generation specialist. Your ONLY job is to output a JSON object — nothing else.
 
@@ -42,12 +40,12 @@ async function run(task, context, onProgress, onPanel) {
 
   let raw = '';
   try {
-    const response = await client.messages.create({
-      model:      MODEL,
-      max_tokens: 512,
-      system:     SYSTEM_PROMPT,
-      messages:   [{ role: 'user', content: userContent }],
-    });
+    const adapter  = createSubagentAdapter();
+    const response = await adapter.complete(
+      [{ role: 'user', content: userContent }],
+      SYSTEM_PROMPT,
+      [],
+    );
 
     raw = response.content
       .filter(b => b.type === 'text')
@@ -72,6 +70,21 @@ async function run(task, context, onProgress, onPanel) {
 
     if (result.error) return { success: false, error: result.error };
 
+    // Auto-save to Pictures\Widow\
+    let savedPath = null;
+    try {
+      const saveDir  = path.join(os.homedir(), 'Pictures', 'Widow');
+      fs.mkdirSync(saveDir, { recursive: true });
+      const stamp    = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const filename = `widow_${stamp}.png`;
+      savedPath      = path.join(saveDir, filename);
+      // data URL — strip header and write binary
+      const b64 = result.url.replace(/^data:image\/\w+;base64,/, '');
+      fs.writeFileSync(savedPath, Buffer.from(b64, 'base64'));
+    } catch (saveErr) {
+      console.warn('[Image agent] Could not auto-save:', saveErr.message);
+    }
+
     onProgress?.('✓ generate_image — image ready');
 
     // Show in Widow's side panel
@@ -81,11 +94,14 @@ async function run(task, context, onProgress, onPanel) {
     });
 
     return {
-      success: true,
-      result:  `Image generated and shown in the panel. URL: ${result.url}`,
-      url:     result.url,
-      prompt:  result.prompt,
-      model:   result.model,
+      success:   true,
+      result:    savedPath
+        ? `Image generated and shown in the panel. Saved to: ${savedPath}`
+        : `Image generated and shown in the panel.`,
+      savedPath,
+      url:    result.url,
+      prompt: result.prompt,
+      model:  result.model,
     };
 
   } catch (err) {

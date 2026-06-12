@@ -87,13 +87,20 @@ try:
 
     elif cmd == 'screenshot':
         import tempfile
+        from PIL import Image
         if len(sys.argv) >= 6:
             region = (int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4]), int(sys.argv[5]))
             img = pyautogui.screenshot(region=region)
         else:
             img = pyautogui.screenshot()
+        # Downscale to max 1280px wide so the base64 payload stays under the
+        # Anthropic 5 MB image limit.  Vision clarity at 1280px is still good.
+        MAX_W = 1280
+        if img.size[0] > MAX_W:
+            ratio = MAX_W / img.size[0]
+            img = img.resize((MAX_W, int(img.size[1] * ratio)), Image.LANCZOS)
         tmp = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
-        img.save(tmp.name)
+        img.save(tmp.name, optimize=True)
         tmp.close()
         out({'ok': True, 'path': tmp.name, 'width': img.size[0], 'height': img.size[1]})
 

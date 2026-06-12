@@ -1,6 +1,6 @@
 const { webSearch, httpRequest } = require('./web');
 const { getTime, getClipboard, setClipboard, getSystemInfo, openApp, sendNotification, mediaControl, getVolume, setVolume, getWindowList, calculate, shellExec, openNativeInPanel, moveWindow, moveWidowToMonitor, getPanelBounds, getDisplayMap, getDisplayBounds, getSnapBounds, restartWidow, reloadRenderer } = require('./system');
-const { readFile, writeFile, listDirectory, moveFile, copyFile, deleteFile, readFileRange, strReplace, appendFile, searchPath } = require('./files');
+const { readFile, writeFile, downloadFile, listDirectory, moveFile, copyFile, deleteFile, readFileRange, strReplace, appendFile, searchPath } = require('./files');
 const { click, dblClick, rClick, moveMouse, scroll, drag, typeText, keyPress, getCursor, screenshot, findClick } = require('./desktop');
 const { searchGitHub, getGitHubFile, createGitHubIssue, getGitHubIssues, getPRStatus } = require('./github');
 const { getMessages: discordGetMessages, sendMessage: discordSendMessage, listChannels: discordListChannels, listServers: discordListServers } = require('./discord');
@@ -194,6 +194,18 @@ const TOOL_DEFINITIONS = [
         content: { type: 'string', description: 'Full file content to write' },
       },
       required: ['path', 'content'],
+    },
+  },
+  {
+    name: 'download_file',
+    description: "Download a file from a URL to disk. Handles normal https:// URLs (web files, images, documents) and data: URLs (e.g. generated images). Creates any missing parent folders automatically. Use this to save generated images, download attachments, grab files from the web, etc.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        url:  { type: 'string',  description: 'URL to download — https://, http://, or data: (base64)' },
+        path: { type: 'string',  description: "Destination path on disk, e.g. C:\\Users\\Phonic\\Pictures\\image.png" },
+      },
+      required: ['url', 'path'],
     },
   },
   {
@@ -819,6 +831,7 @@ async function executeTool(name, input, onPanel, onConsoleLog) {
     case 'read_file_range':   return readFileRange(input.path, input.startLine, input.endLine);
     case 'str_replace':       return strReplace(input.path, input.oldStr, input.newStr);
     case 'write_file':        return writeFile(input.path, input.content);
+    case 'download_file':     return downloadFile(input.url, input.path);
     case 'list_directory':    return listDirectory(input.path);
     case 'search_path':       return searchPath(input.name, { roots: input.roots, type: input.type });
     case 'move_file':         return moveFile(input.from, input.to);
