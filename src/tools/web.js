@@ -131,7 +131,7 @@ function httpRequest(method, url, headers = {}, body = null, timeoutMs = 15_000)
 const HF_MODELS = {
   'flux':         'black-forest-labs/FLUX.1-schnell',
   'flux-schnell': 'black-forest-labs/FLUX.1-schnell',
-  'flux-dev':     'black-forest-labs/FLUX.1-dev',
+  'flux-dev':     'black-forest-labs/FLUX.1-schnell',  // dev requires HF Pro; schnell is free
   'sdxl':         'stabilityai/stable-diffusion-xl-base-1.0',
   'flux-realism': 'black-forest-labs/FLUX.1-schnell',  // schnell handles realism well with prompting
   'flux-anime':   'black-forest-labs/FLUX.1-schnell',
@@ -146,7 +146,7 @@ async function generateImage(prompt, { model = 'flux', width = 1024, height = 10
 
 async function generateImageHF(prompt, { model, width, height, seed }, apiKey) {
   const hfModel = HF_MODELS[model] || HF_MODELS['flux'];
-  const apiUrl  = `https://api-inference.huggingface.co/models/${hfModel}`;
+  const apiUrl  = `https://router.huggingface.co/hf-inference/models/${hfModel}`;
 
   const bodyObj = {
     inputs:     prompt,
