@@ -119,4 +119,23 @@ async function getGitHubIssues(owner, repo, state = 'open', type = 'issues') {
   }));
 }
 
-module.exports = { searchGitHub, getGitHubFile, createGitHubIssue, getGitHubIssues };
+async function getPRStatus(owner, repo, prNumber) {
+  const data = await request('GET', `/repos/${owner}/${repo}/pulls/${prNumber}`);
+  if (data.error) return data;
+  return {
+    number:    data.number,
+    title:     data.title,
+    state:     data.state,
+    merged:    data.merged,
+    mergeable: data.mergeable,
+    author:    data.user?.login,
+    branch:    data.head?.ref,
+    base:      data.base?.ref,
+    created:   data.created_at,
+    updated:   data.updated_at,
+    url:       data.html_url,
+    checks:    data.mergeable_state,
+  };
+}
+
+module.exports = { searchGitHub, getGitHubFile, createGitHubIssue, getGitHubIssues, getPRStatus };

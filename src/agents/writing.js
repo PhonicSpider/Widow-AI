@@ -1,14 +1,9 @@
 require('dotenv').config();
 
-const Anthropic  = require('@anthropic-ai/sdk');
-const { writeFile, readFile } = require('../tools/files');
+const { createSubagentAdapter } = require('../lib/subagent');
+const { writeFile, readFile }    = require('../tools/files');
 
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-
-const CFG = {
-  model:     process.env.WIDOW_MODEL || 'claude-sonnet-4-6',
-  maxTokens: 8096,
-};
+const adapter = createSubagentAdapter();
 
 const WRITING_TOOLS = [
   {
@@ -63,9 +58,10 @@ async function withRetry(fn, onProgress, maxRetries = 3) {
     try {
       return await fn();
     } catch (err) {
-      if (err.status === 429 && attempt < maxRetries) {
+      const isRateLimit = err.status === 429 || err.message?.includes('429') || err.message?.includes('quota');
+      if (isRateLimit && attempt < maxRetries) {
         const wait = parseInt(err.headers?.['retry-after'] || '60', 10);
-        console.warn(`[Writing agent] 429 rate limit — waiting ${wait}s (retry ${attempt + 1}/${maxRetries})`);
+        console.warn(`[Writing agent] rate limit — waiting ${wait}s (retry ${attempt + 1}/${maxRetries})`);
         onProgress?.(`⏳ rate limit hit — waiting ${wait}s before retry...`);
         await new Promise(r => setTimeout(r, wait * 1000));
         continue;
@@ -88,13 +84,7 @@ async function run(task, context, onProgress) {
   try {
     while (iterations++ < MAX_ITERATIONS) {
       const response = await withRetry(
-        () => client.messages.create({
-          model:      CFG.model,
-          max_tokens: CFG.maxTokens,
-          system:     SYSTEM_PROMPT,
-          tools:      WRITING_TOOLS,
-          messages,
-        }),
+        () => adapter.complete(messages, SYSTEM_PROMPT, WRITING_TOOLS),
         onProgress,
       );
 
@@ -118,11 +108,7 @@ async function run(task, context, onProgress) {
           else                                  result = { error: `Unknown tool: ${block.name}` };
 
           onProgress?.(`✓ writing: ${block.name} — done`);
-          toolResults.push({
-            type:        'tool_result',
-            tool_use_id: block.id,
-            content:     JSON.stringify(result),
-          });
+          toolResults.push(adapter.toolResult(block.id, block.name, result));
         }
 
         messages.push({ role: 'user', content: toolResults });

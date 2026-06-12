@@ -298,6 +298,47 @@ function ps(command, timeoutMs = 10_000) {
 }
 
 // ============================================================
+// SHELL EXEC
+// ============================================================
+
+function shellExec(command, { shell = 'powershell', cwd = null, timeoutMs = 30_000 } = {}) {
+  const isCmd = shell === 'cmd' || shell === 'cmd.exe';
+  const exe   = isCmd ? 'cmd.exe' : 'powershell.exe';
+  const args  = isCmd
+    ? ['/c', command]
+    : ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', command];
+
+  return new Promise((resolve) => {
+    const opts = { stdio: ['ignore', 'pipe', 'pipe'] };
+    if (cwd) opts.cwd = cwd;
+    const proc = spawn(exe, args, opts);
+
+    let stdout = '', stderr = '';
+    proc.stdout.on('data', d => { stdout += d.toString(); });
+    proc.stderr.on('data', d => { stderr += d.toString(); });
+
+    const timer = setTimeout(() => {
+      proc.kill();
+      resolve({ error: `timeout after ${timeoutMs}ms`, command, exitCode: -1 });
+    }, timeoutMs);
+
+    proc.on('close', code => {
+      clearTimeout(timer);
+      resolve({
+        exitCode: code ?? -1,
+        stdout:   stdout.trim() || null,
+        stderr:   stderr.trim() || null,
+        ok:       code === 0,
+      });
+    });
+    proc.on('error', err => {
+      clearTimeout(timer);
+      resolve({ error: err.message, command, exitCode: -1 });
+    });
+  });
+}
+
+// ============================================================
 // CLIPBOARD WRITE
 // ============================================================
 
@@ -412,6 +453,46 @@ Write-Output 'ok'`;
 }
 
 // ============================================================
+// CALCULATE — reliable math via Python
+// ============================================================
+
+async function calculate(expression) {
+  // Sanitise: only allow math characters to prevent code injection
+  if (!/^[\d\s\+\-\*\/\(\)\.\,\%\^a-zA-Z_]+$/.test(expression)) {
+    return { error: 'Expression contains disallowed characters. Use standard math syntax.' };
+  }
+
+  const script = `
+import math, json
+try:
+    result = eval(${JSON.stringify(expression)}, {"__builtins__": {}}, {k: getattr(math, k) for k in dir(math) if not k.startswith("_")})
+    print(json.dumps({"result": result, "expression": ${JSON.stringify(expression)}}))
+except Exception as e:
+    print(json.dumps({"error": str(e), "expression": ${JSON.stringify(expression)}}))
+`;
+
+  return new Promise((resolve) => {
+    const proc = spawn('python', ['-c', script], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '';
+    proc.stdout.on('data', d => { out += d.toString(); });
+    const timer = setTimeout(() => { proc.kill(); resolve({ error: 'timeout' }); }, 5_000);
+    proc.on('close', () => {
+      clearTimeout(timer);
+      try { resolve(JSON.parse(out.trim())); }
+      catch { resolve({ error: 'Could not parse result', raw: out.trim() }); }
+    });
+    proc.on('error', () => {
+      // Fall back to PowerShell if Python isn't on PATH
+      clearTimeout(timer);
+      ps(`[math]::Round(${expression}, 10)`, 5_000).then(res => {
+        const n = parseFloat(res.out);
+        resolve(!isNaN(n) ? { result: n, expression } : { error: res.err || 'Could not evaluate expression' });
+      });
+    });
+  });
+}
+
+// ============================================================
 // WINDOW LIST
 // ============================================================
 
@@ -448,7 +529,7 @@ function reloadRenderer() {
 
 module.exports = {
   getTime, getClipboard, setClipboard, getSystemInfo, openApp,
-  sendNotification, mediaControl, getVolume, setVolume, getWindowList,
+  sendNotification, mediaControl, getVolume, setVolume, getWindowList, calculate, shellExec,
   openNativeInPanel, moveWindow, moveWidowToMonitor,
   getPanelBounds, getAllDisplays, getDisplayMap, getDisplayBounds, getSnapBounds,
   restartWidow, reloadRenderer,

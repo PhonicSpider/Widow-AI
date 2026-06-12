@@ -146,4 +146,63 @@ function appendFile(filePath, content) {
   }
 }
 
-module.exports = { readFile, writeFile, listDirectory, moveFile, copyFile, deleteFile, readFileRange, strReplace, appendFile };
+// Search for files or folders by name across one or more root paths.
+// Uses PowerShell Get-ChildItem so it gracefully skips inaccessible folders
+// instead of aborting on the first permission error.
+function searchPath(name, { roots = ['C:\\', 'D:\\'], type = 'any', maxResults = 20 } = {}) {
+  const { spawn } = require('child_process');
+
+  const typeFilter =
+    type === 'file'   ? ' -File'      :
+    type === 'folder' ? ' -Directory' : '';
+
+  const rootList = roots.map(r => `'${r.replace(/'/g, "''")}'`).join(',');
+
+  const script = `
+$roots   = @(${rootList})
+$results = @()
+foreach ($root in $roots) {
+  if (-not (Test-Path $root)) { continue }
+  $found = Get-ChildItem -Path $root -Recurse${typeFilter} -Filter '${name.replace(/'/g, "''")}' \`
+             -ErrorAction SilentlyContinue |
+           Select-Object -ExpandProperty FullName -First ${maxResults}
+  if ($found) { $results += $found }
+  if ($results.Count -ge ${maxResults}) { break }
+}
+$results | Select-Object -First ${maxResults} | ConvertTo-Json -Compress
+`;
+
+  return new Promise((resolve) => {
+    const proc = spawn('powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script],
+      { stdio: ['ignore', 'pipe', 'pipe'] }
+    );
+
+    let out = '';
+    proc.stdout.on('data', d => { out += d.toString(); });
+
+    const timer = setTimeout(() => {
+      proc.kill();
+      resolve({ error: 'timeout', matches: [] });
+    }, 30_000);
+
+    proc.on('close', () => {
+      clearTimeout(timer);
+      try {
+        const raw = out.trim();
+        if (!raw) return resolve({ matches: [], note: `No matches found for "${name}" in ${roots.join(', ')}` });
+        const parsed = JSON.parse(raw);
+        const matches = (Array.isArray(parsed) ? parsed : [parsed]).filter(Boolean);
+        resolve({ matches, searched: roots });
+      } catch (err) {
+        resolve({ error: err.message, matches: [] });
+      }
+    });
+    proc.on('error', err => {
+      clearTimeout(timer);
+      resolve({ error: err.message, matches: [] });
+    });
+  });
+}
+
+module.exports = { readFile, writeFile, listDirectory, moveFile, copyFile, deleteFile, readFileRange, strReplace, appendFile, searchPath };

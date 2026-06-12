@@ -17,7 +17,7 @@ function makeAnthropicAdapter() {
     async *stream(messages, system, tools) {
       const s = client.messages.stream({
         model:      process.env.WIDOW_MODEL || 'claude-sonnet-4-6',
-        max_tokens: 2048,
+        max_tokens: 8192,
         system,
         tools,
         messages,
@@ -38,7 +38,24 @@ function makeAnthropicAdapter() {
       yield { type: 'done', message: final, containsToolUse };
     },
 
-    formatToolResult(id, content, _name) {
+    formatToolResult(id, content, name) {
+      // Vision — embed the screenshot image directly so the model can see what's on screen.
+      if (name === 'take_screenshot' && content?.path && !content?.error) {
+        try {
+          const imageData = fs.readFileSync(content.path);
+          const base64    = imageData.toString('base64');
+          return {
+            type:        'tool_result',
+            tool_use_id: id,
+            content: [
+              { type: 'image', source: { type: 'base64', media_type: 'image/png', data: base64 } },
+              { type: 'text',  text: JSON.stringify({ path: content.path, width: content.width, height: content.height, note: 'Screenshot shown above — you can see it directly.' }) },
+            ],
+          };
+        } catch (err) {
+          console.warn('[Vision] Could not embed screenshot:', err.message);
+        }
+      }
       return { type: 'tool_result', tool_use_id: id, content: JSON.stringify(content) };
     },
   };
@@ -161,7 +178,7 @@ function makeOllamaAdapter() {
       const headers = { 'Content-Type': 'application/json' };
       if (process.env.WIDOW_PROVIDER === 'deepseek' && process.env.DEEPSEEK_API_KEY) {
         headers['Authorization'] = `Bearer ${process.env.DEEPSEEK_API_KEY}`;
-        body.model = process.env.WIDOW_MODEL || 'deepseek-v4-flash';
+        body.model = process.env.WIDOW_MODEL || 'deepseek-chat';
       }
 
       const res = await fetch(`${baseUrl}/chat/completions`, {
@@ -241,7 +258,7 @@ function getAdapter() {
 const MEMORY_DIR   = path.join(__dirname, '../../memory');
 const HISTORY_FILE = path.join(MEMORY_DIR, 'history.json');
 const SUMMARY_FILE = path.join(MEMORY_DIR, 'summary.json');
-const MAX_HISTORY  = 40;
+const MAX_HISTORY  = 60;
 
 function ensureMemoryDir() {
   if (!fs.existsSync(MEMORY_DIR)) fs.mkdirSync(MEMORY_DIR, { recursive: true });
@@ -376,8 +393,10 @@ async function summarizeOldHistory(oldMessages) {
 // SYSTEM PROMPT + SENTENCE EXTRACTION
 // ============================================================
 
+const WIDOW_ROOT = path.resolve(__dirname, '../..');
+
 function buildSystemPrompt() {
-  let prompt = WIDOW_PERSONALITY;
+  let prompt = WIDOW_PERSONALITY.replace('{WIDOW_ROOT}', WIDOW_ROOT);
   if (longTermSummary) {
     prompt += `\n\n---\n\nLONG TERM MEMORY\n\nHere is a summary of your previous conversations with Phonic. Use this to maintain continuity and context:\n\n${longTermSummary}`;
   }
@@ -418,6 +437,7 @@ function toolNarration(name, input) {
     case 'str_replace':       return `Editing ${b(input.path)}`;
     case 'write_file':        return `Writing ${b(input.path)}`;
     case 'list_directory':    return `Listing ${b(input.path) || input.path}`;
+    case 'search_path':       return `Searching for "${input.name}"${input.roots ? ` in ${input.roots.join(', ')}` : ''}`;
     case 'move_file':         return `Moving ${b(input.from)} to ${b(input.to)}`;
     case 'copy_file':         return `Copying ${b(input.from)}`;
     case 'delete_file':       return `Deleting ${b(input.path)}`;
@@ -430,6 +450,7 @@ function toolNarration(name, input) {
     case 'type_text':         return `Typing — "${(input.text || '').slice(0, 50)}"`;
     case 'key_press':         return `Pressing ${input.keys}`;
     case 'click_ui_control':  return `Clicking "${input.control}" in ${input.window}`;
+    case 'calculate':         return `Calculating — ${(input.expression || '').slice(0, 60)}`;
     case 'get_time':          return `Checking the time`;
     case 'get_clipboard':     return `Reading clipboard`;
     case 'get_system_info':   return `Checking system stats`;
@@ -534,7 +555,8 @@ async function chat(userMessage, { onPanel, onSentence, onConsoleLog, onStateCha
           const result = await executeTool(block.name, block.input, onPanel, onConsoleLog);
 
           console.log(`[Tool] ${block.name} result:`, result);
-          onConsoleLog?.(`✓ ${block.name} — ${resultPreview(block.name, result)}`);
+          const prefix = result?.error ? '✗' : '✓';
+          onConsoleLog?.(`${prefix} ${block.name} — ${resultPreview(block.name, result)}`);
 
           return adapter.formatToolResult(block.id, result, block.name);
         })

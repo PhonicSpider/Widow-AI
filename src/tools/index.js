@@ -1,8 +1,12 @@
 const { webSearch, httpRequest } = require('./web');
-const { getTime, getClipboard, setClipboard, getSystemInfo, openApp, sendNotification, mediaControl, getVolume, setVolume, getWindowList, openNativeInPanel, moveWindow, moveWidowToMonitor, getPanelBounds, getDisplayMap, getDisplayBounds, getSnapBounds, restartWidow, reloadRenderer } = require('./system');
-const { readFile, writeFile, listDirectory, moveFile, copyFile, deleteFile, readFileRange, strReplace, appendFile } = require('./files');
+const { getTime, getClipboard, setClipboard, getSystemInfo, openApp, sendNotification, mediaControl, getVolume, setVolume, getWindowList, calculate, shellExec, openNativeInPanel, moveWindow, moveWidowToMonitor, getPanelBounds, getDisplayMap, getDisplayBounds, getSnapBounds, restartWidow, reloadRenderer } = require('./system');
+const { readFile, writeFile, listDirectory, moveFile, copyFile, deleteFile, readFileRange, strReplace, appendFile, searchPath } = require('./files');
 const { click, dblClick, rClick, moveMouse, scroll, drag, typeText, keyPress, getCursor, screenshot, findClick } = require('./desktop');
 const { searchGitHub, getGitHubFile, createGitHubIssue, getGitHubIssues, getPRStatus } = require('./github');
+const { getMessages: discordGetMessages, sendMessage: discordSendMessage, listChannels: discordListChannels, listServers: discordListServers } = require('./discord');
+const { getScenes, setScene, startRecording, stopRecording, toggleRecording, startStream, stopStream, getStatus: obsGetStatus, setSourceVisible } = require('./obs');
+const { searchVideos, searchChannels: ytSearchChannels, getVideo, getChannel: ytGetChannel, getRecentUploads } = require('./youtube');
+const { sendEmail, verifySmtp, listEmails, getEmail, searchEmails, listFolders, deleteEmail, expungeEmail, moveEmail, markEmail, replyEmail, listEmailAccounts } = require('./email');
 const state = require('../state');
 
 const TOOL_DEFINITIONS = [
@@ -114,6 +118,31 @@ const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: 'calculate',
+    description: "Evaluate a math expression reliably using Python. Use for anything numerical — arithmetic, percentages, square roots, unit conversions, powers, trig. More reliable than mental math. Examples: '1920 * 1080', 'sqrt(144)', '100 * 1.15 ** 5', 'sin(pi/4)'.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        expression: { type: 'string', description: "Math expression to evaluate, e.g. '(450 * 1.08) / 12' or 'sqrt(2) * 100'" },
+      },
+      required: ['expression'],
+    },
+  },
+  {
+    name: 'shell_exec',
+    description: "Run a command in PowerShell or CMD on Phonic's system. Use for anything not covered by other tools: running scripts, git commands, npm/pip/python commands, querying system state, managing processes, compiling code, checking installed software, etc. Prefer PowerShell for most tasks.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        command:   { type: 'string', description: 'The command to run' },
+        shell:     { type: 'string', enum: ['powershell', 'cmd'], description: "Shell to use: 'powershell' (default) or 'cmd'" },
+        cwd:       { type: 'string', description: 'Working directory to run the command in (optional)' },
+        timeoutMs: { type: 'integer', description: 'Timeout in milliseconds (default: 30000)' },
+      },
+      required: ['command'],
+    },
+  },
+  {
     name: 'get_system_info',
     description: "Get Phonic's system stats: CPU, RAM, hostname, uptime.",
     input_schema: { type: 'object', properties: {} },
@@ -176,6 +205,19 @@ const TOOL_DEFINITIONS = [
         path: { type: 'string', description: 'Absolute path to the directory' },
       },
       required: ['path'],
+    },
+  },
+  {
+    name: 'search_path',
+    description: "Search for a file or folder by name across drives without needing the full path. Use this whenever Phonic mentions a folder or file by name but doesn't give the full path — e.g. 'find Ronin_Disk_Manager' or 'where is my resume'. Searches C:\\ and D:\\ by default. Returns all matching full paths.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        name:  { type: 'string', description: 'File or folder name to search for. Supports wildcards e.g. "Ronin*" or "*.pdf"' },
+        roots: { type: 'array', items: { type: 'string' }, description: 'Root paths to search from. Default: ["C:\\\\", "D:\\\\"]' },
+        type:  { type: 'string', enum: ['any', 'file', 'folder'], description: 'Limit to files, folders, or both. Default: any' },
+      },
+      required: ['name'],
     },
   },
   {
@@ -276,11 +318,11 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'delegate_to_agent',
-    description: "Delegate a complex task to a specialized sub-agent. Use 'coding' for programming tasks, 'research' for in-depth multi-source research, 'writing' for creative/long-form writing tasks. The agent runs its own tool loop and returns a plain-text result.",
+    description: "Delegate a complex task to a specialized sub-agent. Use 'coding' for programming tasks, 'research' for in-depth multi-source research, 'writing' for creative/long-form writing, 'image' for generating any image from a description, 'email' for reading/managing/analysing emails including spam and phishing detection. The agent runs on a cheaper model and returns a result.",
     input_schema: {
       type: 'object',
       properties: {
-        agent:   { type: 'string', enum: ['coding', 'research', 'writing'], description: "Which agent: 'coding' for code/files, 'research' for deep web research, 'writing' for creative writing" },
+        agent:   { type: 'string', enum: ['coding', 'research', 'writing', 'image', 'email'], description: "Which agent: 'coding' for code/files, 'research' for deep web research, 'writing' for creative writing, 'image' for image generation, 'email' for email reading/sending/managing/phishing analysis" },
         task:    { type: 'string', description: 'Full task description — be specific and include all relevant detail' },
         context: { type: 'string', description: 'Optional: any context the agent should know' },
       },
@@ -445,6 +487,233 @@ const TOOL_DEFINITIONS = [
       required: ['owner', 'repo'],
     },
   },
+  {
+    name: 'github_get_pr',
+    description: "Get the status and details of a specific GitHub pull request — state, branch, merge status, author, and review checks.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        owner:  { type: 'string', description: 'Repository owner' },
+        repo:   { type: 'string', description: 'Repository name' },
+        number: { type: 'integer', description: 'Pull request number' },
+      },
+      required: ['owner', 'repo', 'number'],
+    },
+  },
+
+  // ── Discord ─────────────────────────────────────────────────────────────────
+  {
+    name: 'discord_list_servers',
+    description: "List all Discord servers the bot is in. Run this first to get server IDs if you don't know them.",
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'discord_list_channels',
+    description: "List text channels in a Discord server.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        server_id: { type: 'string', description: 'Discord server (guild) ID' },
+      },
+      required: ['server_id'],
+    },
+  },
+  {
+    name: 'discord_get_messages',
+    description: "Read recent messages from a Discord channel.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        channel_id: { type: 'string', description: 'Discord channel ID' },
+        limit:      { type: 'integer', description: 'Number of messages to fetch (1–100, default 20)' },
+      },
+      required: ['channel_id'],
+    },
+  },
+  {
+    name: 'discord_send_message',
+    description: "Send a message to a Discord channel.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        channel_id: { type: 'string', description: 'Discord channel ID' },
+        content:    { type: 'string', description: 'Message text (max 2000 chars)' },
+      },
+      required: ['channel_id', 'content'],
+    },
+  },
+
+  // ── OBS ──────────────────────────────────────────────────────────────────────
+  {
+    name: 'obs_get_status',
+    description: "Get OBS status — whether it's recording or streaming, FPS, CPU usage.",
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'obs_get_scenes',
+    description: "List all OBS scenes and which one is currently active.",
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'obs_set_scene',
+    description: "Switch OBS to a different scene.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        scene: { type: 'string', description: 'Exact scene name as shown in OBS' },
+      },
+      required: ['scene'],
+    },
+  },
+  {
+    name: 'obs_start_recording',
+    description: "Start OBS recording.",
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'obs_stop_recording',
+    description: "Stop OBS recording. Returns the path of the saved file.",
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'obs_toggle_recording',
+    description: "Toggle OBS recording on or off.",
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'obs_start_stream',
+    description: "Start OBS streaming.",
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'obs_stop_stream',
+    description: "Stop OBS streaming.",
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'obs_set_source_visible',
+    description: "Show or hide a source in an OBS scene.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        scene:   { type: 'string',  description: 'Scene name' },
+        source:  { type: 'string',  description: 'Source name' },
+        visible: { type: 'boolean', description: 'true to show, false to hide' },
+      },
+      required: ['scene', 'source', 'visible'],
+    },
+  },
+
+  // ── YouTube ──────────────────────────────────────────────────────────────────
+  {
+    name: 'youtube_search',
+    description: "Search YouTube for videos. Returns title, channel, views, duration, and URL.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        query:      { type: 'string',  description: 'Search query' },
+        maxResults: { type: 'integer', description: 'Number of results (1–25, default 8)' },
+        order:      { type: 'string',  enum: ['relevance', 'date', 'viewCount', 'rating'], description: "Sort order (default: 'relevance')" },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'youtube_get_video',
+    description: "Get detailed stats for a YouTube video — views, likes, comments, duration, description.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        video_id: { type: 'string', description: 'YouTube video ID (the part after ?v= in the URL)' },
+      },
+      required: ['video_id'],
+    },
+  },
+  {
+    name: 'youtube_get_channel',
+    description: "Get a YouTube channel's info — subscriber count, total views, video count.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        channel_id: { type: 'string', description: 'Channel ID (UCxxx) or handle (@handle)' },
+      },
+      required: ['channel_id'],
+    },
+  },
+  {
+    name: 'youtube_recent_uploads',
+    description: "Get the most recent videos uploaded by a YouTube channel.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        channel_id:  { type: 'string',  description: 'Channel ID (UCxxx)' },
+        maxResults:  { type: 'integer', description: 'Number of videos (1–25, default 5)' },
+      },
+      required: ['channel_id'],
+    },
+  },
+
+  // ── Email ────────────────────────────────────────────────────────────────────
+  {
+    name: 'send_email',
+    description: "Send an email via SMTP. Requires SMTP settings in .env (see SMTP_HOST, SMTP_USER, SMTP_PASS). Works with Gmail app passwords, Outlook, and any SMTP server.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        to:      { type: 'string', description: 'Recipient address or "Name <email>"' },
+        subject: { type: 'string', description: 'Email subject line' },
+        text:    { type: 'string', description: 'Plain-text body' },
+        html:    { type: 'string', description: 'Optional HTML body (overrides text display in HTML-capable clients)' },
+        cc:      { type: 'string', description: 'Optional CC address(es)' },
+        bcc:     { type: 'string', description: 'Optional BCC address(es)' },
+      },
+      required: ['to', 'subject', 'text'],
+    },
+  },
+  {
+    name: 'verify_smtp',
+    description: "Test the SMTP connection to confirm email is configured correctly before trying to send.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        account: { type: 'string', description: 'Account name or number to test. Defaults to primary.' },
+      },
+    },
+  },
+  {
+    name: 'list_email_accounts',
+    description: "List all configured email accounts (IMAP and SMTP) with their names and addresses.",
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'email_list',
+    description: "Quickly list recent emails from a mailbox folder. For richer email tasks (reading bodies, phishing analysis, bulk management) use delegate_to_agent with agent='email' instead.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        folder:     { type: 'string',  description: "Folder to list — INBOX, Sent, Trash, Spam, etc. Default: INBOX" },
+        limit:      { type: 'integer', description: 'Number of emails to return (default: 20)' },
+        unreadOnly: { type: 'boolean', description: 'Return only unread messages' },
+        account:    { type: 'string',  description: 'Account name (e.g. "personal", "work") or number. Defaults to primary.' },
+      },
+    },
+  },
+  {
+    name: 'email_search',
+    description: "Search emails by sender, subject, or keyword. For full email bodies and phishing analysis use delegate_to_agent with agent='email'.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        folder:  { type: 'string',  description: 'Folder to search (default: INBOX)' },
+        from:    { type: 'string',  description: 'Sender address or name fragment' },
+        subject: { type: 'string',  description: 'Subject keyword' },
+        query:   { type: 'string',  description: 'Full-text keyword (slow)' },
+        unread:  { type: 'boolean', description: 'Only unread' },
+        limit:   { type: 'integer', description: 'Max results (default: 20)' },
+        account: { type: 'string',  description: 'Account name or number. Defaults to primary.' },
+      },
+    },
+  },
 ];
 
 // Apps with a usable web version — open these in the panel instead of a native window
@@ -542,6 +811,8 @@ async function executeTool(name, input, onPanel, onConsoleLog) {
     case 'set_volume':        return setVolume(input.level);
     case 'get_window_list':   return getWindowList();
     case 'http_request':      return httpRequest(input.method, input.url, input.headers || {}, input.body || null, input.timeoutMs || 15_000);
+    case 'calculate':         return calculate(input.expression);
+    case 'shell_exec':        return shellExec(input.command, { shell: input.shell, cwd: input.cwd, timeoutMs: input.timeoutMs });
     case 'get_system_info':   return getSystemInfo();
 
     case 'read_file':         return readFile(input.path);
@@ -549,6 +820,7 @@ async function executeTool(name, input, onPanel, onConsoleLog) {
     case 'str_replace':       return strReplace(input.path, input.oldStr, input.newStr);
     case 'write_file':        return writeFile(input.path, input.content);
     case 'list_directory':    return listDirectory(input.path);
+    case 'search_path':       return searchPath(input.name, { roots: input.roots, type: input.type });
     case 'move_file':         return moveFile(input.from, input.to);
     case 'copy_file':         return copyFile(input.from, input.to);
     case 'delete_file':       return deleteFile(input.path);
@@ -584,6 +856,8 @@ async function executeTool(name, input, onPanel, onConsoleLog) {
         coding:   () => require('../agents/coding'),
         research: () => require('../agents/research'),
         writing:  () => require('../agents/writing'),
+        image:    () => require('../agents/image'),
+        email:    () => require('../agents/email'),
       };
       const factory = AGENTS[input.agent];
       if (!factory) return { error: `Unknown agent: ${input.agent}` };
@@ -619,7 +893,7 @@ async function executeTool(name, input, onPanel, onConsoleLog) {
         }
       }
 
-      return factory().run(input.task, enrichedContext, onConsoleLog);
+      return factory().run(input.task, enrichedContext, onConsoleLog, onPanel);
     }
 
     // ── Desktop automation ────────────────────────────────────────────────────
@@ -649,6 +923,38 @@ async function executeTool(name, input, onPanel, onConsoleLog) {
       return createGitHubIssue(input.owner, input.repo, input.title, input.body, input.labels);
     case 'github_list_issues':
       return getGitHubIssues(input.owner, input.repo, input.state || 'open', input.type || 'issues');
+    case 'github_get_pr':
+      return getPRStatus(input.owner, input.repo, input.number);
+
+    // ── Discord ───────────────────────────────────────────────────────────────
+    case 'discord_list_servers':    return discordListServers();
+    case 'discord_list_channels':   return discordListChannels(input.server_id);
+    case 'discord_get_messages':    return discordGetMessages(input.channel_id, input.limit || 20);
+    case 'discord_send_message':    return discordSendMessage(input.channel_id, input.content);
+
+    // ── OBS ───────────────────────────────────────────────────────────────────
+    case 'obs_get_status':          return obsGetStatus();
+    case 'obs_get_scenes':          return getScenes();
+    case 'obs_set_scene':           return setScene(input.scene);
+    case 'obs_start_recording':     return startRecording();
+    case 'obs_stop_recording':      return stopRecording();
+    case 'obs_toggle_recording':    return toggleRecording();
+    case 'obs_start_stream':        return startStream();
+    case 'obs_stop_stream':         return stopStream();
+    case 'obs_set_source_visible':  return setSourceVisible(input.scene, input.source, input.visible);
+
+    // ── YouTube ───────────────────────────────────────────────────────────────
+    case 'youtube_search':          return searchVideos(input.query, { maxResults: input.maxResults, order: input.order });
+    case 'youtube_get_video':       return getVideo(input.video_id);
+    case 'youtube_get_channel':     return ytGetChannel(input.channel_id);
+    case 'youtube_recent_uploads':  return getRecentUploads(input.channel_id, input.maxResults);
+
+    // ── Email ─────────────────────────────────────────────────────────────────
+    case 'send_email':           return sendEmail(input);
+    case 'verify_smtp':          return verifySmtp(input.account);
+    case 'email_list':           return listEmails({ folder: input.folder, limit: input.limit, unreadOnly: input.unreadOnly, account: input.account });
+    case 'email_search':         return searchEmails(input);
+    case 'list_email_accounts':  return listEmailAccounts();
 
     default:
       return { error: `Unknown tool: ${name}` };

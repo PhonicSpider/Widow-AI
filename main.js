@@ -1,6 +1,28 @@
 const { app } = require('electron');
 const path   = require('path');
 
+// ============================================================
+// ADMIN ELEVATION (dev mode only)
+// Packaged builds get elevation from the UAC manifest embedded by
+// electron-builder (requestedExecutionLevel: requireAdministrator).
+// In dev (electron .), no manifest exists — check ourselves and
+// re-launch elevated if needed.
+// ============================================================
+if (!app.isPackaged) {
+  const { spawnSync: _elevSpawn } = require('child_process');
+  const adminCheck = _elevSpawn('net', ['session'], { stdio: 'pipe', timeout: 3000 });
+  if (adminCheck.status !== 0) {
+    console.warn('[Widow] Not running as admin — relaunching elevated...');
+    const exe  = process.execPath.replace(/'/g, "''");
+    const args = process.argv.slice(1).map(a => `'${a.replace(/'/g, "''")}'`).join(',');
+    _elevSpawn('powershell.exe', [
+      '-NoProfile', '-NonInteractive', '-Command',
+      `Start-Process -FilePath '${exe}' -ArgumentList @(${args || "''"}) -Verb RunAs`,
+    ], { stdio: 'ignore' });
+    process.exit(0);
+  }
+}
+
 // In packaged builds .env is copied to resources/ via extraResources;
 // in dev it lives in the project root alongside main.js.
 require('dotenv').config({
@@ -84,6 +106,7 @@ async function ensureChatterbox() {
 let widowWindow    = null;
 let micMuted       = false;
 let harnessRunning = false;  // true while chat() is executing — gates DORMANT on speaker 'done'
+let speakerActive  = false;  // true while TTS is playing — suppresses mic input so Widow doesn't hear herself
 
 function createWindow() {
   // Monitor 1 = rightmost non-primary = Widow's home display.
@@ -136,9 +159,13 @@ app.whenReady().then(async () => {
 
   // Wire speaker state → Widow UI state
   speaker.on('start', () => {
+    speakerActive = true;  // Suppress mic while Widow is speaking
     if (widowWindow) widowWindow.webContents.send('widow:state', 'SPEAKING');
   });
   speaker.on('done', () => {
+    // Hold the mic suppression for 1.5s after TTS ends so the speech recognizer
+    // doesn't pick up the tail end of Widow's audio before it fades out.
+    setTimeout(() => { speakerActive = false; }, 1500);
     // Only go DORMANT if the harness has finished — if it's still running tools,
     // the narration TTS ending should not drop us out of WORKING state.
     if (widowWindow && !harnessRunning) {
@@ -164,6 +191,8 @@ app.whenReady().then(async () => {
 
   speechListener.on('wake', () => {
     if (micMuted) return;
+    if (harnessRunning) return;
+    if (speakerActive) return;
     inSession = true;
     if (widowWindow) {
       widowWindow.webContents.send('widow:state', 'LISTENING');
@@ -174,6 +203,8 @@ app.whenReady().then(async () => {
   // User started speaking mid-session — shift back to LISTENING visually
   speechListener.on('active', () => {
     if (micMuted) return;
+    if (harnessRunning) return;  // Don't interrupt working state
+    if (speakerActive) return;   // Don't flip to LISTENING while Widow is speaking
     if (inSession && widowWindow) {
       widowWindow.webContents.send('widow:state', 'LISTENING');
     }
@@ -181,11 +212,14 @@ app.whenReady().then(async () => {
 
   speechListener.on('command', (command) => {
     if (micMuted) return;
+    if (speakerActive) return;   // Ignore transcripts while Widow's TTS is playing
     if (widowWindow) widowWindow.webContents.send('widow:voice-command', command);
   });
 
   // Whisper found no speech after energy trigger — put UI back to dormant
   speechListener.on('cancel', () => {
+    if (harnessRunning) return;  // Don't interrupt working state
+    if (speakerActive) return;   // Ignore cancels while Widow is speaking
     if (inSession && widowWindow) {
       widowWindow.webContents.send('widow:state', 'DORMANT');
     }
@@ -202,6 +236,7 @@ app.whenReady().then(async () => {
   });
 
   speechListener.on('timeout', () => {
+    if (harnessRunning) return;
     inSession = false;
     if (widowWindow) widowWindow.webContents.send('widow:state', 'DORMANT');
   });
@@ -226,17 +261,15 @@ app.on('window-all-closed', () => {
 ipcMain.handle('harness:chat', async (_event, userMessage) => {
   harnessRunning = true;
   try {
-    speaker.cancel(); // Cut any ongoing TTS immediately on new input
+    speaker.cancel();    // Cut any ongoing TTS immediately on new input
+    speakerActive = false; // Clear speaker flag since we just cancelled
     widowWindow.webContents.send('widow:state', 'THINKING');
-
-    let anySentenceEnqueued = false;
 
     const response = await chat(userMessage, {
       onPanel: (panel) => {
         if (widowWindow) widowWindow.webContents.send('widow:panel', panel);
       },
       onSentence: (sentence) => {
-        anySentenceEnqueued = true;
         speaker.enqueue(sentence);
         // speaker.on('start') → SPEAKING, speaker.on('done') → DORMANT
       },
@@ -245,29 +278,35 @@ ipcMain.handle('harness:chat', async (_event, userMessage) => {
       },
       onConsoleLog: (msg) => {
         if (widowWindow) widowWindow.webContents.send('widow:console-log', msg);
+        // Speak narration lines aloud so Phonic knows what Widow is doing between tools
+        if (msg.startsWith('» ')) speaker.enqueue(msg.slice(2).trim());
       },
     });
 
     // Full response text → transcript immediately (audio may still be playing)
     widowWindow.webContents.send('harness:response', { userMessage, response });
 
-    // If nothing was enqueued (e.g. tool-only turn with no spoken reply),
-    // go dormant now — speaker events won't fire in that case.
-    if (!anySentenceEnqueued) {
-      widowWindow.webContents.send('widow:state', 'DORMANT');
-    }
-
     return { success: true };
   } catch (err) {
     console.error('Harness error:', err);
     speaker.cancel();
-    widowWindow.webContents.send('widow:state', 'DORMANT');
-    widowWindow.webContents.send('harness:response', { userMessage, response: `[Error: ${err.message}]` });
-    return { success: false, error: err.message };
+    const errMsg = err.message || String(err);
+    if (widowWindow) {
+      widowWindow.webContents.send('widow:console-log', `✗ ERROR: ${errMsg}`);
+      if (err.stack) {
+        const location = (err.stack.split('\n')[1] || '').trim();
+        if (location) widowWindow.webContents.send('widow:console-log', `  at ${location}`);
+      }
+      widowWindow.webContents.send('harness:response', { userMessage, response: `[Error: ${errMsg}]` });
+    }
+    // Speak the error so Phonic knows something went wrong, then let finally → DORMANT
+    speaker.enqueue(`Something went wrong. ${errMsg.slice(0, 80)}`);
+    return { success: false, error: errMsg };
   } finally {
     harnessRunning = false;
     // If TTS already drained while the harness was mid-run (speaker.on('done') was
     // suppressed), it won't fire again — send DORMANT here to avoid getting stuck.
+    // Otherwise speaker.on('done') fires naturally and sees harnessRunning=false.
     if (!speaker.busy && widowWindow) {
       widowWindow.webContents.send('widow:state', 'DORMANT');
     }

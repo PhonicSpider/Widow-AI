@@ -737,3 +737,12 @@ body.console-hidden:not(.state-active):not(.tools-active) #sys-console {
   from { opacity: 0; transform: translateX(-5px); }
   to   { opacity: 0.22; transform: translateX(0); }
 }
+
+.console-line.console-error {
+  animation: console-error-in 0.2s ease forwards;
+}
+
+@keyframes console-error-in {
+  from { opacity: 0; transform: translateX(-5px); }
+  to   { opacity: 0.85; transform: translateX(0); color: #ff4040; }
+}

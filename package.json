@@ -12,7 +12,11 @@
     "@anthropic-ai/sdk": "^0.102.0",
     "@google/generative-ai": "^0.24.1",
     "dotenv": "^17.4.2",
-    "three": "^0.184.0"
+    "imapflow": "^1.4.0",
+    "mailparser": "^3.9.9",
+    "nodemailer": "^6.9.0",
+    "three": "^0.184.0",
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "electron": "^29.0.0",
@@ -40,6 +44,7 @@
       "!.git/**"
     ],
     "win": {
+      "requestedExecutionLevel": "requireAdministrator",
       "target": [
         {
           "target": "dir",

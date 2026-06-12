@@ -136,6 +136,21 @@ function setState(state) {
   const busy = state === State.THINKING || state === State.SPEAKING || state === State.WORKING;
   chatInput.disabled = busy;
   chatSend.disabled = busy;
+
+  // Auto-manage console visibility — show when a task starts, hide when idle
+  if (state === State.WORKING || state === State.THINKING) {
+    transcriptContainer.classList.remove('console-hidden');
+    chatBar.classList.remove('console-hidden');
+    consoleToggle.classList.add('active');
+    document.body.classList.remove('console-hidden');
+    if (sysConsole) sysConsole.classList.remove('sys-console-hidden');
+  } else if (state === State.DORMANT) {
+    transcriptContainer.classList.add('console-hidden');
+    chatBar.classList.add('console-hidden');
+    consoleToggle.classList.remove('active');
+    document.body.classList.add('console-hidden');
+    if (sysConsole) sysConsole.classList.add('sys-console-hidden');
+  }
 }
 
 // ============================================================
@@ -313,6 +328,7 @@ function appendConsoleLine(msg) {
 
   const line = document.createElement('div');
   line.classList.add('console-line');
+  if (msg.startsWith('✗')) line.classList.add('console-error');
   line.textContent = msg;
   sysConsoleInner.appendChild(line);
 
@@ -334,9 +350,9 @@ function appendConsoleLine(msg) {
   if (msg.startsWith('▸')) {
     setActiveToolCount(activeToolCount + 1);
     if (msg.startsWith('▸ coding:')) updateCodingMode(+1);
-  } else if (msg.startsWith('✓')) {
+  } else if (msg.startsWith('✓') || msg.startsWith('✗')) {
     setActiveToolCount(activeToolCount - 1);
-    if (msg.startsWith('✓ coding:')) updateCodingMode(-1);
+    if (msg.startsWith('✓ coding:') || msg.startsWith('✗ coding:')) updateCodingMode(-1);
   }
 }
 
@@ -346,8 +362,8 @@ function appendConsoleLine(msg) {
 
 if (window.widow) {
   window.widow.onStateChange((state) => {
-    // Don't interrupt an active response with a LISTENING state from speech detection
-    if (state === 'LISTENING' && (currentState === State.THINKING || currentState === State.SPEAKING)) return;
+    // Don't interrupt an active task with a LISTENING state from speech detection
+    if (state === 'LISTENING' && (currentState === State.THINKING || currentState === State.SPEAKING || currentState === State.WORKING)) return;
     setState(state);
   });
 
